@@ -60,15 +60,20 @@ class PackageFirmwareTests(unittest.TestCase):
 
     def test_rejects_reset_vector_outside_slot_a(self) -> None:
         image = bytearray(valid_test_image())
-        struct.pack_into("<I", image, 4, 0x08043001)
+        struct.pack_into("<I", image, 4, 0x08023001)
         with self.assertRaises(PackageError):
             validate_image(bytes(image))
 
     def test_rejects_image_above_slot_payload_limit(self) -> None:
-        image = bytearray(0x3A001)
+        image = bytearray(0x1A001)
         struct.pack_into("<II", image, 0, 0x20010000, 0x08009009)
         with self.assertRaises(PackageError):
             validate_image(bytes(image))
+
+    def test_accepts_exactly_104_kib_payload(self) -> None:
+        image = bytearray(104 * 1024)
+        struct.pack_into("<II", image, 0, 0x20024000, 0x08022FFF)
+        validate_image(bytes(image))
 
     def test_rejects_inverted_hardware_revision_range(self) -> None:
         with self.assertRaises(PackageError):

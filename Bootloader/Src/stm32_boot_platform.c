@@ -61,6 +61,8 @@ static bool flashEraseRaw(uint32_t address, uint32_t size)
     FLASH_EraseInitTypeDef erase = {0};
     uint32_t error = 0U;
     uint32_t offset;
+    uint32_t remaining = size;
+    DeviceEraseSpan span;
     HAL_StatusTypeDef status;
     HAL_StatusTypeDef lock_status;
     if (!flashContains(address, size) || ((address % BL_ERASE_PAGE_SIZE) != 0U) ||
@@ -75,11 +77,20 @@ static bool flashEraseRaw(uint32_t address, uint32_t size)
         return false;
     }
     erase.TypeErase = FLASH_TYPEERASE_PAGES;
-    erase.NbPages = size / BL_ERASE_PAGE_SIZE;
     offset = address - BL_FLASH_START;
-    erase.Banks = (offset >= FLASH_BANK_SIZE) ? FLASH_BANK_2 : FLASH_BANK_1;
-    erase.Page = (offset % FLASH_BANK_SIZE) / BL_ERASE_PAGE_SIZE;
-    status = HAL_FLASHEx_Erase(&erase, &error);
+    status = HAL_OK;
+    while ((remaining != 0U) && (status == HAL_OK)) {
+        if (!DeviceMemory_EraseSpan(offset, remaining, FLASH_BANK_NB, &span)) {
+            status = HAL_ERROR;
+            break;
+        }
+        erase.Banks = (span.bank == 1U) ? FLASH_BANK_1 : FLASH_BANK_2;
+        erase.Page = span.page;
+        erase.NbPages = span.pages;
+        status = HAL_FLASHEx_Erase(&erase, &error);
+        offset += span.pages * BL_ERASE_PAGE_SIZE;
+        remaining -= span.pages * BL_ERASE_PAGE_SIZE;
+    }
     lock_status = HAL_FLASH_Lock();
     return (status == HAL_OK) && (lock_status == HAL_OK);
 }

@@ -6,8 +6,10 @@
 - `<prefix>.package.zip`: `firmware.bin`, `manifest.bin`, and descriptive
   `package.json`, ready for a programmer/update client to consume.
 
-The application must be built for Slot A (`0x08009000`). Export the raw BIN
-from the VEGA ELF, then run from this repository:
+The application must be built for Slot A (`0x08009000`). Both updated CubeIDE
+projects automatically generate a raw BIN after a successful Debug/Release
+build. The `objcopy` command below is only needed for manual export from an ELF;
+otherwise use the generated BIN and run the packaging command from this repository:
 
 ```powershell
 & "C:\ST\STM32CubeIDE_1.16.1\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.12.3.rel1.win32_1.0.200.202406191623\tools\bin\arm-none-eabi-objcopy.exe" `
@@ -30,7 +32,7 @@ from the VEGA ELF, then run from this repository:
 Replace the example compatibility IDs and hardware-revision limits with the
 values provisioned in the target's factory identity. Hardware revisions are
 encoded as `(major << 16) | minor`, inclusive. The tool refuses images with an
-invalid vector table or larger than the 232 KiB Slot-A payload.
+invalid vector table or larger than the 104 KiB Slot-A payload.
 `--version` must match the application's numeric version. The current VEGA
 `0.1.0` version is `0x100`: `(major << 16) | (minor << 8) | patch`.
 It is NOT encoded like the hardware revision.
@@ -63,10 +65,13 @@ the synchronous signature check and inactive-slot erase before the begin reply.
 
 ## First programming / SWD recovery
 
-Rebuild BOTH projects: the earlier 32 KiB bootloader / `0x08008000` application
-layout is obsolete. The full signature verifier requires a 36 KiB bootloader;
-both slots now reserve 232 KiB for application bytes. Do not mix old binaries,
+Rebuild BOTH projects for **STM32G0B1RCT6, 256 KiB Flash / 144 KiB RAM**.
+The earlier 512 KiB layout (factory at `0x0807E800`) is NOT valid on this MCU.
+The bootloader remains 36 KiB, with two 106 KiB slots and **104 KiB payload**
+per slot. Slot A stays at `0x08009000`, but metadata, Slot B, the discovery
+record contents and swap-state bounds have changed. Do not mix old binaries,
 manifests, discovery records or an existing swap journal with this layout.
+Use `STM32G0B1RCTX_FLASH.ld`, not the removed VETX linker scripts.
 
 Export the current bootloader ELF (Debug or Release) to BIN:
 
@@ -94,23 +99,32 @@ It refuses to overwrite an output directory.
 Outputs:
 
 - `initial.hex`: sparse Intel HEX containing bootloader at `0x08000000`,
-  image at `0x08009000`, manifest at `0x08043000`, identity at `0x0807E800`;
+  image at `0x08009000`, manifest at `0x08023000`, identity at `0x0803E800`;
 - `slot-a.bin`: application plus erased padding and its manifest; base
   `0x08009000`, for explicit selective SWD recovery;
-- `factory-identity.bin`: 128-byte record; base `0x0807E800`.
+- `factory-identity.bin`: 128-byte record; base `0x0803E800`.
+
+For bootloader-only first programming through J-Link/J-Flash, select the actual
+STM32G0B1RC device and write the rebuilt bootloader BIN at `0x08000000`. Then
+write ONLY `factory-identity.bin` at **`0x0803E800`**, verify, and reset before
+using the CAN update client. The factory erase page is
+`0x0803E800..0x0803EFFF`; do not erase the adjacent journal.
+Do not load `initial.hex` or `slot-a.bin` if the first application is to be
+transferred through CAN. Those files already contain the application.
+The old `0x0807E800` address is outside this MCU's physical Flash.
 
 For a NEW or deliberately re-commissioned board, use STM32CubeProgrammer:
 
-1. Connect over SWD and confirm STM32G0B1, 512 KiB Flash and the expected bank
+1. Connect over SWD and confirm STM32G0B1RC, 256 KiB Flash and the expected bank
    mapping. This software does not change option bytes.
 2. On a used device, first back up its unique factory record and journal.
    Factory identity cannot be reconstructed from a generic firmware BIN.
 3. For this initial layout installation only, selectively erase
-   `0x08000000..0x0807FFFF`, or use full-chip erase ONLY after explicitly
+   `0x08000000..0x0803FFFF`, or use full-chip erase ONLY after explicitly
    accepting loss of existing identity and journal and having their replacement.
    The HEX is sparse: merely writing it does NOT clear a stale transaction.
 4. Program `initial.hex` with verify. Check that NVM
-   `0x0807F000..0x0807FFFF` remains erased. It is intentionally absent from HEX;
+   `0x0803F000..0x0803FFFF` remains erased. It is intentionally absent from HEX;
    scratch and Slot B are also absent.
 5. Reset. The bootloader validates the signed image against factory identity,
    initializes the blank journal, imports validated initial image metadata and
@@ -148,6 +162,8 @@ There is NO physical service interlock or authenticated CAN command. Use only
 on a controlled bench/trusted bus. Firmware signatures authenticate the image,
 not the sender of the service command. Normal power-up boots a valid application
 without waiting for CAN or a service input.
+The client checks OD `0x200F` for the 104 KiB payload limit before sending the
+manifest. An old 512 KiB bootloader is rejected; reflash it through SWD.
 
 On timeout/error inspect `0x200A`, `0x2001`, `0x2007` before manually recovering.
 For an interrupted RECEIVING/VERIFIED transfer in recovery mode, an informed

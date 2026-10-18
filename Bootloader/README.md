@@ -41,7 +41,9 @@ normative tables have not been supplied.
 
 ## Flash map
 
-STM32G0B1VETx has 512 KiB Flash, 2 KiB erase pages, 8-byte programming units.
+The target is **STM32G0B1RCT6 (LQFP64)**: 256 KiB Flash, 144 KiB RAM,
+2 KiB erase pages and 8-byte programming units. Both CubeIDE configurations
+use MCU `STM32G0B1RCTx` and `STM32G0B1RCTX_FLASH.ld`.
 The fixed map gives most usable Flash to the expanding application while
 reserving 36 KiB for the mostly-static bootloader, with signature verification
 enabled. The earlier 32 KiB estimate excluded the disabled verifier and is obsolete.
@@ -49,17 +51,17 @@ enabled. The earlier 32 KiB estimate excluded the disabled verifier and is obsol
 | Region | Start | Size | Purpose |
 |---|---:|---:|---|
 | Bootloader | `0x08000000` | 36 KiB | CANopen, verification, swap/recovery |
-| Slot A | `0x08009000` | 234 KiB | Executable application, fixed link address |
-| Slot A manifest | `0x08043000` | 2 KiB | Signed image metadata; inside Slot A |
-| Slot B | `0x08043800` | 234 KiB | Staging/rollback image, same link address |
-| Slot B manifest | `0x0807D800` | 2 KiB | Signed image metadata; inside Slot B |
-| Swap scratch | `0x0807E000` | 2 KiB | One page during A/B swap |
-| Factory identity | `0x0807E800` | 2 KiB | Commissioned immutable product identity |
-| NVM journal | `0x0807F000` | 4 KiB | Two-page power-fail-safe metadata journal |
+| Slot A | `0x08009000` | 106 KiB | Executable application, fixed link address |
+| Slot A manifest | `0x08023000` | 2 KiB | Signed image metadata; inside Slot A |
+| Slot B | `0x08023800` | 106 KiB | Staging/rollback image, same link address |
+| Slot B manifest | `0x0803D800` | 2 KiB | Signed image metadata; inside Slot B |
+| Swap scratch | `0x0803E000` | 2 KiB | One page during A/B swap |
+| Factory identity | `0x0803E800` | 2 KiB | Commissioned immutable product identity |
+| NVM journal | `0x0803F000` | 4 KiB | Two-page power-fail-safe metadata journal |
 
-Each slot has 232 KiB (`0x3A000`) of payload before its manifest page.
-The VEGA application Debug link contains 48,872 bytes of text (Release:
-28,692 bytes), about 21% of the current payload limit in Debug. Its linker now
+Each slot has 104 KiB (`0x1A000`) of payload before its manifest page.
+The application occupies approximately 48 KiB in Debug and 28 KiB in Release,
+leaving room for growth within the fixed payload limit. Its linker
 targets Slot A at `0x08009000`; its vector-table offset and trial-confirmation
 hook must remain paired with this bootloader layout.
 
@@ -68,6 +70,19 @@ every page through scratch, so Slot A contains the new image at its linked
 address and Slot B retains the previous image. Only Slot A is executed.
 Persisted page/phase values make the three-copy operation restartable after
 power loss.
+
+`device_memory.h` is the identical portable memory contract in both projects.
+Runtime checks require exactly 256 KiB and reject swapped-bank mappings.
+The HAL's actual bank count determines page numbering: factory is page 125 in
+single-bank mode, or bank 2 page 61 in normal dual-bank mode. Multi-page erases
+are split at bank boundaries, including Slot A crossing `0x08020000` in dual-bank
+mode. No option bytes are changed. The 53 pages per slot require 159 swap states;
+both journal decoders reject out-of-layout page/phase values.
+
+The previous 512 KiB layout is not compatible with RCT6. Back up any identity
+and journal before replacing the bootloader; this is initial commissioning,
+not automatic journal migration. Rebuild both projects, regenerate packages
+and factory files, and follow the [SWD instructions](../Tools/README.md).
 
 ## Image authenticity and enablement gate
 
@@ -152,13 +167,15 @@ These tests do not replace target link-size,
 FDCAN, flash-bank, power-cut, signature interoperability, LiftAppTool, or
 CiA conformance testing.
 
-The enabled Debug/Release verifier and LTO image contain 33,604 bytes of text,
+The enabled Debug/Release verifier and LTO image contain 33,592 bytes of text,
 84 bytes of initialized data and 5,708 bytes of BSS. The load image leaves
-3,176 bytes before the fixed discovery record at `0x08008FE0`. The record contains
+3,184 bytes before the fixed discovery record at `0x08008FE0`. The record contains
 the protocol, layout and signing gate and is checked by the application.
 The linker asserts that the load image cannot overlap this record or either
 application slot. The exported bootloader BIN spans exactly 36 KiB including
 the record and address gap, not 36 KiB of executable code.
+Both projects automatically generate the raw BIN in their selected Debug/Release
+output directory after a successful CubeIDE build.
 CubeIDE 1.16.1 still generates `.su`/`.cyclo` peer-output rules when the reports
 are disabled; clean LTO builds warn that these diagnostic outputs were not
 emitted. These are generator/report warnings, not linker overflow or C errors.
@@ -176,7 +193,7 @@ Before production programming:
 2. Sign and package the exact image/manifest format above; verify against an
    independent Ed25519 implementation.
 3. Build both projects and confirm the bootloader fits the 36 KiB region and
-   the application fits the 232 KiB payload region.
+   the application fits the 104 KiB payload region.
 4. Validate the actual MCU option-byte bank mapping, write/erase behavior, and
    power interruption at every journal/swap phase.
 5. Exercise trial confirmation, failed self-test, rollback, CAN loss, SDO

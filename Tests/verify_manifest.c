@@ -2,13 +2,14 @@
 #include "firmware_auth.h"
 #include "sha256.h"
 #include "persistent_storage.h"
+#include "device_memory.h"
 #include <stdio.h>
 #include <string.h>
 
 int main(int argc, char **argv)
 {
     uint8_t record[BL_MANIFEST_RECORD_SIZE];
-    uint8_t image[237568];
+    uint8_t image[DEVICE_IMAGE_MAX];
     uint8_t digest[32];
     BlImageManifest manifest;
     BlSha256 sha;

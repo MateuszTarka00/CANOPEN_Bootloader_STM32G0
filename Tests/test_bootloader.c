@@ -12,7 +12,7 @@
 #include <string.h>
 
 #define TEST_FLASH_START UINT32_C(0x08000000)
-#define TEST_FLASH_SIZE UINT32_C(0x7000)
+#define TEST_FLASH_SIZE DEVICE_FLASH_SIZE
 #define TEST_PROGRAM_SIZE 8U
 
 static uint8_t hexNibble(char value)
@@ -60,13 +60,13 @@ static void testPersistentUpdateStateValidation(void)
     memset(&data, 0, sizeof(data));
     data.pending_slot = UINT32_MAX;
     assert(Ps_Validate(&data));
-    data.update_state = UINT32_C(0x261);
+    data.update_state = UINT32_C(0x19E);
     assert(Ps_Validate(&data));
-    data.update_state = UINT32_C(0x461);
+    data.update_state = UINT32_C(0x39E);
     assert(Ps_Validate(&data));
-    data.update_state = UINT32_C(0x262);
+    data.update_state = UINT32_C(0x19F);
     assert(!Ps_Validate(&data));
-    data.update_state = UINT32_C(0x462);
+    data.update_state = UINT32_C(0x39F);
     assert(!Ps_Validate(&data));
     puts("persistent swap state validation boundaries OK");
 }
@@ -482,7 +482,7 @@ static void testRejectedAndInterruptedUpdates(void)
     puts("bootloader failure paths: compatibility, authentication, timeout, readback, pending and cancel OK");
 }
 
-static void testRestartableSwapAndRollback(void)
+static void testRestartableSwapAndRollback(bool device_layout)
 {
     FakeFlash flash;
     FakeNvm nvm;
@@ -497,6 +497,17 @@ static void testRestartableSwapAndRollback(void)
     uint32_t offset_a;
     uint32_t offset_b;
     uint32_t guard = 0U;
+    uint32_t i;
+    if (device_layout) {
+        layout.bootloader.size = DEVICE_BOOT_SIZE;
+        layout.slot[0].address = DEVICE_SLOT_A_START;
+        layout.slot[0].size = DEVICE_SLOT_SIZE;
+        layout.slot[1].address = DEVICE_SLOT_B_START;
+        layout.slot[1].size = DEVICE_SLOT_SIZE;
+        layout.scratch.address = DEVICE_SCRATCH_START;
+        layout.factory.address = DEVICE_FACTORY_START;
+        layout.journal.address = DEVICE_NVM_START;
+    }
     memset(&flash, 0, sizeof(flash));
     memset(flash.bytes, 0xFF, sizeof(flash.bytes));
     memset(&nvm, 0xFF, sizeof(nvm));
@@ -526,7 +537,7 @@ static void testRestartableSwapAndRollback(void)
         BlTransaction_Init(&transaction, &bootloader, &store, &data);
         (void)BlTransaction_Poll(&transaction);
         assert(!transaction.failed);
-        assert(++guard < 20U);
+        assert(++guard <= (layout.slot[0].size / layout.erase_unit) * 3U);
     }
     assert(data.update_state == BL_TX_TRIAL);
     assert(flash.bytes[offset_a] == 0x55U);
@@ -542,12 +553,22 @@ static void testRestartableSwapAndRollback(void)
         BlTransaction_Init(&transaction, &bootloader, &store, &data);
         (void)BlTransaction_Poll(&transaction);
         assert(!transaction.failed);
-        assert(++guard < 40U);
+        assert(++guard <= (layout.slot[0].size / layout.erase_unit) * 6U);
     }
     assert(data.update_state == BL_TX_IDLE);
     assert(data.pending_slot == UINT32_MAX);
     assert(flash.bytes[offset_a] == 0xAAU);
     assert(flash.bytes[offset_b] == 0x55U);
+    for (i = 0U; i < layout.slot[0].size; ++i) {
+        assert(flash.bytes[offset_a + i] == 0xAAU);
+        assert(flash.bytes[offset_b + i] == 0x55U);
+    }
+    for (i = 0U; i < layout.bootloader.size; ++i) {
+        assert(flash.bytes[i] == 0xFFU);
+    }
+    for (i = layout.factory.address - TEST_FLASH_START; i < TEST_FLASH_SIZE; ++i) {
+        assert(flash.bytes[i] == 0xFFU);
+    }
     data.update_state = BL_TX_CONFIRMED;
     data.boot_request = 1U;
     data.boot_node_id = 1U;
@@ -556,6 +577,48 @@ static void testRestartableSwapAndRollback(void)
     assert(BlTransaction_OnStartup(&transaction));
     assert(data.update_state == BL_TX_IDLE && data.boot_request == 1U);
     puts("A/B restart, trial rollback, and new confirmed-image request preserved OK");
+}
+
+static void testDeviceMemoryGeometry(void)
+{
+    DeviceEraseSpan span;
+    uint32_t banks;
+    uint32_t offset;
+    assert(DEVICE_SLOT_A_START == DEVICE_FLASH_START + DEVICE_BOOT_SIZE);
+    assert(DEVICE_SLOT_A_START + DEVICE_SLOT_SIZE == DEVICE_SLOT_B_START);
+    assert(DEVICE_SLOT_B_START + DEVICE_SLOT_SIZE == DEVICE_SCRATCH_START);
+    assert(DEVICE_SCRATCH_START + DEVICE_FLASH_PAGE_SIZE == DEVICE_FACTORY_START);
+    assert(DEVICE_FACTORY_START + DEVICE_FLASH_PAGE_SIZE == DEVICE_NVM_START);
+    assert(DEVICE_NVM_START + DEVICE_NVM_SIZE == DEVICE_FLASH_START + DEVICE_FLASH_SIZE);
+    assert(DEVICE_IMAGE_MAX == 104U * 1024U && DEVICE_SWAP_STATE_COUNT == 159U);
+    for (banks = 1U; banks <= 2U; ++banks) {
+        uint32_t bank_size = DEVICE_FLASH_SIZE / banks;
+        for (offset = 0U; offset < DEVICE_FLASH_SIZE; offset += DEVICE_FLASH_PAGE_SIZE) {
+            uint32_t remaining = DEVICE_FLASH_SIZE - offset;
+            assert(DeviceMemory_EraseSpan(offset, remaining, banks, &span));
+            assert(span.bank == offset / bank_size + 1U);
+            assert(span.page == (offset % bank_size) / DEVICE_FLASH_PAGE_SIZE);
+            assert(span.pages > 0U);
+            assert((span.page + span.pages) * DEVICE_FLASH_PAGE_SIZE == bank_size);
+            assert(span.pages * DEVICE_FLASH_PAGE_SIZE <= remaining);
+        }
+    }
+    assert(DeviceMemory_EraseSpan(0x9000U, DEVICE_SLOT_SIZE, 2U, &span));
+    assert(span.bank == 1U && span.page == 18U && span.pages == 46U);
+    assert(DeviceMemory_EraseSpan(0x20000U, 0x3800U, 2U, &span));
+    assert(span.bank == 2U && span.page == 0U && span.pages == 7U);
+    assert(DeviceMemory_EraseSpan(0x3E800U, 0x800U, 1U, &span));
+    assert(span.bank == 1U && span.page == 125U && span.pages == 1U);
+    assert(DeviceMemory_EraseSpan(0x3E800U, 0x800U, 2U, &span));
+    assert(span.bank == 2U && span.page == 61U && span.pages == 1U);
+    assert(!DeviceMemory_EraseSpan(0x40000U, 0x800U, 1U, &span));
+    assert(!DeviceMemory_EraseSpan(0x3F800U, 0x1000U, 2U, &span));
+    assert(!DeviceMemory_EraseSpan(1U, 0x800U, 1U, &span));
+    assert(!DeviceMemory_EraseSpan(0U, 1U, 1U, &span));
+    assert(!DeviceMemory_EraseSpan(0U, 0U, 1U, &span));
+    assert(!DeviceMemory_EraseSpan(0U, 0x800U, 3U, &span));
+    assert(!DeviceMemory_EraseSpan(0U, 0x800U, 1U, NULL));
+    puts("256 KiB layout and exhaustive single/dual-bank erase planning OK");
 }
 
 static void sdoDownload(CoSdo *sdo, uint16_t index, const uint8_t *data, uint32_t size)
@@ -704,7 +767,9 @@ int main(void)
     testSha256();
     testEd25519();
     testPersistentUpdateStateValidation();
-    testRestartableSwapAndRollback();
+    testDeviceMemoryGeometry();
+    testRestartableSwapAndRollback(false);
+    testRestartableSwapAndRollback(true);
     testLayoutAndGuards();
     testSuccessfulUpdateAndRollback();
     testRejectedAndInterruptedUpdates();

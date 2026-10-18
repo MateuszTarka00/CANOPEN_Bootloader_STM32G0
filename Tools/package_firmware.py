@@ -35,7 +35,13 @@ DEFAULT_PUBLIC_KEY_HEADER = (
 )
 
 FLASH_SLOT_A_START = 0x08009000
-FLASH_SLOT_IMAGE_MAX = 0x3A000
+FLASH_SIZE = 0x40000
+FLASH_BOOT_SIZE = 0x9000
+FLASH_SLOT_SIZE = 0x1A800
+FLASH_SLOT_IMAGE_MAX = 0x1A000
+FLASH_SLOT_B_START = 0x08023800
+FLASH_FACTORY_START = 0x0803E800
+FLASH_NVM_START = 0x0803F000
 RAM_START = 0x20000000
 RAM_END = 0x20024000
 MANIFEST_SIZE = 152
@@ -171,7 +177,7 @@ def validate_image(image: bytes) -> None:
     if len(image) > FLASH_SLOT_IMAGE_MAX:
         raise PackageError(
             f"Image is {len(image)} bytes; Slot A allows at most "
-            f"{FLASH_SLOT_IMAGE_MAX} bytes (232 KiB)."
+            f"{FLASH_SLOT_IMAGE_MAX} bytes (104 KiB)."
         )
     if len(image) < 8:
         raise PackageError("Image is too short to contain an STM32 vector table.")

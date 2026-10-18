@@ -77,6 +77,11 @@ def main() -> None:
             raise RuntimeError("C verifier did not reject the altered image.")
         if args.application_root is not None:
             app = args.application_root.resolve(strict=True)
+            for header in ("device_memory.h", "factory_identity.h"):
+                boot_header = ROOT / "Bootloader" / "Inc" / header
+                app_header = app / "Core" / "Inc" / header
+                if boot_header.read_bytes() != app_header.read_bytes():
+                    raise RuntimeError(f"Application/bootloader ABI header differs: {header}")
             app_sources = [app / "Tests" / "test_canopen.c"] + [
                 app / "Core" / "Src" / (name + ".c") for name in (
                     "canopen", "canopen_sdo", "canopen_nmt", "canopen_heartbeat",

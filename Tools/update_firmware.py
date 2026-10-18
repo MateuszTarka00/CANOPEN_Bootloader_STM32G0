@@ -14,10 +14,12 @@ from cryptography.exceptions import InvalidSignature
 if __package__:
     from .package_firmware import (
         DEFAULT_PUBLIC_KEY_HEADER, PackageError, read_firmware_public_key, verify_package,
+        FLASH_SLOT_IMAGE_MAX,
     )
 else:
     from package_firmware import (
         DEFAULT_PUBLIC_KEY_HEADER, PackageError, read_firmware_public_key, verify_package,
+        FLASH_SLOT_IMAGE_MAX,
     )
 
 
@@ -134,6 +136,11 @@ def main() -> int:
                 raise SdoError(f"Unknown execution mode {mode}.")
             if client.read(0x200C) != 1 or client.read(0x200B) != 1:
                 raise SdoError("Bootloader profile/signing/identity is not ready.")
+            if client.read(0x200F) != FLASH_SLOT_IMAGE_MAX:
+                raise SdoError(
+                    "Bootloader layout does not match STM32G0B1RC / 104 KiB payload. "
+                    "Rebuild and reprogram the correct bootloader before updating."
+                )
             if client.read(0x2001) != 0:
                 raise SdoError("Bootloader is not idle; inspect state before cancelling/retrying.")
             client.write(0x2008, manifest)

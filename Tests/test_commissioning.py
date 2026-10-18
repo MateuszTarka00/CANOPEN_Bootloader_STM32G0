@@ -56,7 +56,7 @@ class UpdateServer(can.Listener):
         address = data[1:4]
         if data[0] == 0x40:
             values = {0x200A: self.mode, 0x2009: 2, 0x200B: 1, 0x200C: 1,
-                      0x2001: self.state, 0x2006: self.version}
+                      0x2001: self.state, 0x2006: self.version, 0x200F: 0x1A000}
             reply = b"\x43" + address + struct.pack("<I", values[index])
         elif data[0] == 0x2F and index == 0x2000:
             command = data[4]
@@ -128,7 +128,7 @@ class CommissioningTests(unittest.TestCase):
         boot = bytearray(b"\xff" * 0x9000)
         boot[512:544] = self.public
         struct.pack_into("<8I", boot, 0x8FE0, 0x424C4331, 2, 0x08009000,
-                         0x3A800, 0x0807E800, 0x0807F000, 0x9000, 1)
+                         0x1A800, 0x0803E800, 0x0803F000, 0x9000, 1)
         boot_path = self.root / "boot.bin"
         boot_path.write_bytes(boot)
         output = self.root / "factory"
@@ -146,14 +146,24 @@ class CommissioningTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<I", record, 24)[0], 123)
         self.assertEqual(struct.unpack_from("<I", record, 120)[0], zlib.crc32(record[:120]))
         memory = decode_hex((output / "initial.hex").read_text())
-        self.assertEqual(bytes(memory[0x08043000 + i] for i in range(152)), self.manifest)
+        self.assertEqual(bytes(memory[0x08023000 + i] for i in range(152)), self.manifest)
         self.assertEqual(bytes(memory[0x08009000 + i] for i in range(512)), self.image)
-        self.assertTrue(all(address < 0x08043800 or 0x0807E800 <= address < 0x0807E880
+        self.assertTrue(all(address < 0x08023800 or 0x0803E800 <= address < 0x0803E880
                             for address in memory))
         with self.assertRaises(PackageError):
             prepare_factory.factory_record(self.manifest, 0, 1, 0x10003)
         with self.assertRaises(PackageError):
             prepare_factory.factory_record(self.manifest, 123, 1, 0x20000)
+        struct.pack_into("<8I", boot, 0x8FE0, 0x424C4331, 2, 0x08009000,
+                         0x3A800, 0x0807E800, 0x0807F000, 0x9000, 1)
+        boot_path.write_bytes(boot)
+        args[-1] = str(self.root / "legacy-rejected")
+        with patch("sys.argv", args), patch.object(
+                prepare_factory, "read_firmware_public_key", return_value=self.public):
+            with contextlib.redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(prepare_factory.main(), 2)
+            self.assertIn("256 KiB layout", errors.getvalue())
+        self.assertFalse((self.root / "legacy-rejected").exists())
 
     def test_hex_crosses_extended_address_without_wrapping(self) -> None:
         payload = bytes(range(32))
@@ -198,6 +208,19 @@ class CommissioningTests(unittest.TestCase):
                     client.read(0x2000)
             with self.assertRaises(ValueError):
                 client.write(0x2002, b"")
+
+    def test_update_rejects_legacy_bootloader_before_downloading(self) -> None:
+        args = ["update_firmware", "--package", str(self.package), "--interface",
+                "virtual", "--channel", "unused", "--confirm-update"]
+        with patch("sys.argv", args), patch.object(
+                update_firmware, "read_firmware_public_key", return_value=self.public
+                ), patch.object(update_firmware.can, "Bus"), patch.object(
+                    update_firmware, "SdoClient") as client:
+            client.return_value.read.side_effect = [1, 1, 1, 0x3A000]
+            with contextlib.redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(update_firmware.main(), 2)
+            self.assertIn("104 KiB payload", errors.getvalue())
+            client.return_value.write.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
  * Dependencies: persistent_storage -> canopen_types, string.
  */
 #include "persistent_storage.h"
+#include "device_memory.h"
 #include <string.h>
 
 #define PS_MAGIC UINT32_C(0x434F5053)
@@ -32,9 +33,9 @@ bool Ps_Validate(const PsData *d)
     update_state_valid = (d != NULL) &&
         ((d->update_state <= 8U) ||
          ((d->update_state >= UINT32_C(0x100)) &&
-          (d->update_state < UINT32_C(0x262))) ||
+          (d->update_state < (UINT32_C(0x100) + DEVICE_SWAP_STATE_COUNT))) ||
          ((d->update_state >= UINT32_C(0x300)) &&
-          (d->update_state < UINT32_C(0x462))) ||
+          (d->update_state < (UINT32_C(0x300) + DEVICE_SWAP_STATE_COUNT))) ||
          (d->update_state == UINT32_C(0x500)) ||
          (d->update_state == UINT32_C(0x501)));
     return (d != NULL) &&

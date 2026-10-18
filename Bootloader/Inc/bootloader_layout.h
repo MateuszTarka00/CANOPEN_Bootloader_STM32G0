@@ -1,6 +1,6 @@
 /**
  * @file bootloader_layout.h
- * @brief Fixed STM32G0B1VETx Flash partition map.
+ * @brief Fixed STM32G0B1RCT6 Flash partition map.
  *
  * The two application slots contain identical-address-linked images. The
  * bootloader swaps complete pages through the scratch page after verification;
@@ -10,22 +10,23 @@
 #define BOOTLOADER_LAYOUT_H
 
 #include <stdint.h>
+#include "device_memory.h"
 
-#define BL_FLASH_START             UINT32_C(0x08000000)
-#define BL_FLASH_SIZE              UINT32_C(0x00080000)
-#define BL_ERASE_PAGE_SIZE         UINT32_C(0x00000800)
+#define BL_FLASH_START             DEVICE_FLASH_START
+#define BL_FLASH_SIZE              DEVICE_FLASH_SIZE
+#define BL_ERASE_PAGE_SIZE         DEVICE_FLASH_PAGE_SIZE
 #define BL_PROGRAM_UNIT_SIZE       UINT8_C(8)
 
 #define BL_BOOT_START              UINT32_C(0x08000000)
-#define BL_BOOT_SIZE               UINT32_C(0x00009000)
-#define BL_SLOT_A_START            UINT32_C(0x08009000)
-#define BL_SLOT_B_START            UINT32_C(0x08043800)
-#define BL_SLOT_SIZE               UINT32_C(0x0003A800)
+#define BL_BOOT_SIZE               DEVICE_BOOT_SIZE
+#define BL_SLOT_A_START            DEVICE_SLOT_A_START
+#define BL_SLOT_B_START            DEVICE_SLOT_B_START
+#define BL_SLOT_SIZE               DEVICE_SLOT_SIZE
 #define BL_SLOT_IMAGE_MAX          (BL_SLOT_SIZE - BL_ERASE_PAGE_SIZE)
-#define BL_SWAP_SCRATCH_START      UINT32_C(0x0807E000)
-#define BL_FACTORY_START           UINT32_C(0x0807E800)
-#define BL_NVM_START               UINT32_C(0x0807F000)
-#define BL_NVM_SIZE                UINT32_C(0x00001000)
+#define BL_SWAP_SCRATCH_START      DEVICE_SCRATCH_START
+#define BL_FACTORY_START           DEVICE_FACTORY_START
+#define BL_NVM_START               DEVICE_NVM_START
+#define BL_NVM_SIZE                DEVICE_NVM_SIZE
 
 #define BL_SLOT_COUNT              2U
 #define BL_SWAP_PAGE_COUNT         (BL_SLOT_SIZE / BL_ERASE_PAGE_SIZE)

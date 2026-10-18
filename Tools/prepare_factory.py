@@ -13,11 +13,13 @@ from cryptography.exceptions import InvalidSignature
 if __package__:
     from .package_firmware import (
         DEFAULT_PUBLIC_KEY_HEADER, FLASH_SLOT_A_START, FLASH_SLOT_IMAGE_MAX,
+        FLASH_BOOT_SIZE, FLASH_SLOT_SIZE, FLASH_FACTORY_START, FLASH_NVM_START,
         PackageError, parse_uint32, read_firmware_public_key, verify_package,
     )
 else:
     from package_firmware import (
         DEFAULT_PUBLIC_KEY_HEADER, FLASH_SLOT_A_START, FLASH_SLOT_IMAGE_MAX,
+        FLASH_BOOT_SIZE, FLASH_SLOT_SIZE, FLASH_FACTORY_START, FLASH_NVM_START,
         PackageError, parse_uint32, read_firmware_public_key, verify_package,
     )
 
@@ -76,19 +78,23 @@ def main() -> int:
         public = read_firmware_public_key(DEFAULT_PUBLIC_KEY_HEADER)
         image, manifest = verify_package(args.package, public)
         boot = args.bootloader.read_bytes()
-        if len(boot) != 0x9000:
+        if len(boot) != FLASH_BOOT_SIZE:
             raise PackageError("Expected a 36 KiB bootloader BIN including its discovery record.")
-        contract = struct.unpack_from("<8I", boot, 0x8FE0)
-        if contract != (0x424C4331, 2, 0x08009000, 0x3A800,
-                        0x0807E800, 0x0807F000, 0x9000, 1):
-            raise PackageError("Bootloader discovery contract is missing or signing is disabled.")
+        contract = struct.unpack_from("<8I", boot, FLASH_BOOT_SIZE - 32)
+        if contract != (0x424C4331, 2, FLASH_SLOT_A_START, FLASH_SLOT_SIZE,
+                        FLASH_FACTORY_START, FLASH_NVM_START, FLASH_BOOT_SIZE, 1):
+            raise PackageError(
+                "Bootloader discovery contract does not match the STM32G0B1RC "
+                "256 KiB layout, or signing is disabled. Rebuild both projects."
+            )
         if public not in boot:
             raise PackageError("Bootloader BIN does not contain the configured signing public key.")
         identity = factory_record(manifest, args.serial, args.product_revision,
                                   args.hardware_revision)
         slot = image.ljust(FLASH_SLOT_IMAGE_MAX, b"\xff") + manifest
         regions = [(0x08000000, boot), (FLASH_SLOT_A_START, image),
-                   (0x08043000, manifest), (0x0807E800, identity)]
+                   (FLASH_SLOT_A_START + FLASH_SLOT_IMAGE_MAX, manifest),
+                   (FLASH_FACTORY_START, identity)]
         hex_text = intel_hex(regions)
         args.output.mkdir(parents=True, exist_ok=False)
         (args.output / "initial.hex").write_text(hex_text, encoding="ascii")
