@@ -281,7 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Validate a Slot-A-linked STM32 BIN and create its signed 152-byte "
-            "manifest and ZIP update package."
+            "manifest, ZIP package, and manifest-prefixed CANopen update container."
         )
     )
     parser.add_argument("--image", type=Path, required=True, help="Input application BIN")
@@ -329,10 +329,13 @@ def _write_outputs(
     manifest: bytes,
     metadata: dict[str, int | str],
     force: bool,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, Path]:
     manifest_path = prefix.with_name(prefix.name + ".manifest.bin")
     package_path = prefix.with_name(prefix.name + ".package.zip")
-    if not force and (manifest_path.exists() or package_path.exists()):
+    update_path = prefix.with_name(prefix.name + ".update.bin")
+    if not force and any(
+        path.exists() for path in (manifest_path, package_path, update_path)
+    ):
         raise PackageError(
             "Output exists. Choose another --output-prefix or pass --force."
         )
@@ -344,6 +347,7 @@ def _write_outputs(
         for destination, content in (
             (manifest_path, manifest),
             (package_path, None),
+            (update_path, manifest + image),
         ):
             with tempfile.NamedTemporaryFile(
                 prefix=destination.name + ".",
@@ -364,11 +368,13 @@ def _write_outputs(
         os.replace(temporary_paths[0], manifest_path)
         temporary_paths.pop(0)
         os.replace(temporary_paths[0], package_path)
+        temporary_paths.pop(0)
+        os.replace(temporary_paths[0], update_path)
         temporary_paths.clear()
     finally:
         for temporary in temporary_paths:
             temporary.unlink(missing_ok=True)
-    return manifest_path, package_path
+    return manifest_path, package_path, update_path
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -417,7 +423,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "hardware_max": args.hw_max,
             "signing_key_matches_bootloader": public_key == configured_key,
         }
-        manifest_path, package_path = _write_outputs(
+        manifest_path, package_path, update_path = _write_outputs(
             image_path,
             args.output_prefix.resolve(),
             image,
@@ -436,6 +442,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Firmware: {image_path} ({len(image)} bytes)")
     print(f"Manifest: {manifest_path} ({len(manifest)} bytes)")
     print(f"Update package: {package_path}")
+    print(f"CANopen update container: {update_path} ({len(manifest) + len(image)} bytes)")
     if provisioned is not None and provisioned.group(1) == "0":
         print(
             "WARNING: this bootloader has BL_SIGNING_PUBLIC_KEY_PROVISIONED=0; "

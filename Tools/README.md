@@ -5,6 +5,9 @@
 - `<prefix>.manifest.bin`: the bootloader's 152-byte signed manifest;
 - `<prefix>.package.zip`: `firmware.bin`, `manifest.bin`, and descriptive
   `package.json`, ready for a programmer/update client to consume.
+- `<prefix>.update.bin`: the exact CANopen `0x1F50:01` container stream,
+  composed of the 152-byte signed manifest followed immediately by the raw
+  firmware image.
 
 The application must be built for Slot A (`0x08009000`). Both updated CubeIDE
 projects automatically generate a raw BIN after a successful Debug/Release
@@ -60,8 +63,20 @@ The transfer client must write the exact 152-byte `manifest.bin` to `0x2008:00`,
 start with `0x2000:00 = 1`, download `firmware.bin` to `0x2002:00`, finish with
 `0x2000:00 = 2`, and schedule activation with `0x2000:00 = 3` only after
 verification succeeds.
-The receiver inactivity timeout and PC request deadline are 15 seconds, allowing
-the synchronous signature check and inactive-slot erase before the begin reply.
+The firmware-update inactivity timeout and PC request deadline are 15 seconds,
+allowing the synchronous signature check and inactive-slot erase before the
+begin reply. An individual SDO session still times out after one second without
+traffic; clients should keep the transfer moving rather than pause between
+segments.
+
+Alternatively, a CANopen client that supports segmented or block domain
+downloads may send the complete `.update.bin` to `0x1F50:01`. Its declared
+transfer length must include the manifest and image. The bootloader validates
+the signed manifest, hardware compatibility, and exact combined length before
+erasing; after payload CRC/read-back/image checks pass, the update remains
+VERIFIED. This path does not activate or reset the device. It is a transport
+contract for the bootloader, not a claim of complete LiftAppTool wizard
+interoperability. Do not send the ZIP or a bare application BIN to `0x1F50:01`.
 
 ## First programming / SWD recovery
 

@@ -69,6 +69,7 @@ typedef struct {
     bool (*activate)(void *user, uint8_t slot);
     bool (*rollback)(void *user, uint8_t slot);
     bool (*jump)(void *user, uint32_t vector_address);
+    uint32_t (*get_time_ms)(void *user);
 } BlPlatform;
 
 typedef struct {

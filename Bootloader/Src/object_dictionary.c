@@ -29,6 +29,17 @@ static uint32_t writeNumber(uint8_t *data, uint32_t *size, uint32_t value,
     return 0U;
 }
 
+static uint32_t odTimeMs(void *user)
+{
+    BootOd *od = (BootOd *)user;
+    if ((od != NULL) && (od->bootloader != NULL) &&
+        (od->bootloader->platform.get_time_ms != NULL)) {
+        return od->bootloader->platform.get_time_ms(
+            od->bootloader->platform.user);
+    }
+    return 0U;
+}
+
 static uint8_t publicUpdateState(const BootOd *od)
 {
     if (od->persistent->update_state == BL_TX_RECEIVING) {
@@ -83,6 +94,10 @@ CoSdoOps BootOd_SdoOps(BootOd *od)
     ops.stream_write = BootOd_StreamWrite;
     ops.stream_end = BootOd_StreamEnd;
     ops.stream_abort = BootOd_StreamAbort;
+    if ((od->bootloader != NULL) &&
+        (od->bootloader->platform.get_time_ms != NULL)) {
+        ops.get_time_ms = odTimeMs;
+    }
     return ops;
 }
 
@@ -242,9 +257,23 @@ uint32_t BootOd_CheckDownload(void *user, uint16_t index, uint8_t subindex,
         return CO_ABORT_LENGTH;
     }
     if (index == 0x1F50U) {
-        return (subindex == 1U) ?
-            BootOd_CheckDownload(user, 0x2002U, 0U, size, size_known) :
-            ((subindex == 0U) ? CO_ABORT_READ_ONLY : CO_ABORT_SUBINDEX);
+        if (subindex != 1U) {
+            return (subindex == 0U) ? CO_ABORT_READ_ONLY : CO_ABORT_SUBINDEX;
+        }
+        if (!size_known || (size < BL_MANIFEST_RECORD_SIZE + 8U) ||
+            (size > BL_MANIFEST_RECORD_SIZE + BL_SLOT_IMAGE_MAX)) {
+            return CO_ABORT_LENGTH;
+        }
+        if ((od->update == NULL) || !od->factory_valid ||
+            !od->update_auth_available || (od->bootloader == NULL) ||
+            (od->persistent->update_state != BL_TX_IDLE) ||
+            (od->bootloader->pending_slot != BL_NO_SLOT) ||
+            od->container_active ||
+            ((od->update->state != FWU_IDLE) &&
+             (od->update->state != FWU_FAILED))) {
+            return CO_ABORT_STATE;
+        }
+        return 0U;
     }
     if (subindex != 0U) {
         return CO_ABORT_SUBINDEX;
@@ -290,6 +319,29 @@ static uint32_t persistError(BootOd *od, uint32_t result)
     return 0U;
 }
 
+static bool clearReceivingState(BootOd *od, uint32_t result)
+{
+    PsData candidate;
+    if ((od == NULL) || (od->persistent == NULL) || (od->store == NULL)) {
+        return false;
+    }
+    candidate = *od->persistent;
+    candidate.update_state = BL_TX_IDLE;
+    candidate.pending_slot = UINT32_MAX;
+    candidate.pending_version = 0U;
+    candidate.update_result = result;
+    candidate.boot_request = 0U;
+    candidate.boot_node_id = 0U;
+    candidate.boot_bitrate = 0U;
+    candidate.boot_protocol = 0U;
+    if (Ps_Save(od->store, &candidate) != PS_OK) {
+        od->update_auth_available = false;
+        return false;
+    }
+    *od->persistent = candidate;
+    return true;
+}
+
 uint32_t BootOd_Write(void *user, uint16_t index, uint8_t subindex,
                       const uint8_t *data, uint32_t size, uint32_t now)
 {
@@ -299,8 +351,8 @@ uint32_t BootOd_Write(void *user, uint16_t index, uint8_t subindex,
         return CO_ABORT_HARDWARE;
     }
     if (index == 0x1F50U) {
-        return (subindex == 1U) ?
-            BootOd_Write(user, 0x2002U, 0U, data, size, now) : CO_ABORT_SUBINDEX;
+        (void)now;
+        return (subindex == 1U) ? CO_ABORT_ACCESS : CO_ABORT_SUBINDEX;
     }
     abort_code = BootOd_CheckDownload(od, index, subindex, size, true);
     if (abort_code != 0U) {
@@ -361,6 +413,10 @@ uint32_t BootOd_Write(void *user, uint16_t index, uint8_t subindex,
                 if (persistError(od, (uint32_t)od->update->result) != 0U) {
                     return CO_ABORT_HARDWARE;
                 }
+                if (!clearReceivingState(od,
+                        (uint32_t)od->update->result)) {
+                    return CO_ABORT_HARDWARE;
+                }
                 return (od->update->result == FWU_RESULT_INCOMPATIBLE_IMAGE) ?
                     CO_ABORT_VALUE : CO_ABORT_HARDWARE;
             }
@@ -375,6 +431,11 @@ uint32_t BootOd_Write(void *user, uint16_t index, uint8_t subindex,
             return 0U;
         }
         if (command == 0U) {
+            od->container_active = false;
+            od->container_manifest_ready = false;
+            od->container_size = 0U;
+            od->container_received = 0U;
+            memset(od->container_manifest, 0, sizeof(od->container_manifest));
             if (od->update->state == FWU_RECEIVING) {
                 (void)FirmwareUpdate_Cancel(od->update);
             }
@@ -405,8 +466,20 @@ uint32_t BootOd_Write(void *user, uint16_t index, uint8_t subindex,
 uint32_t BootOd_StreamBegin(void *user, uint16_t index, uint8_t subindex,
                             uint32_t size, uint32_t now)
 {
+    BootOd *od = (BootOd *)user;
+    uint32_t abort_code = BootOd_CheckDownload(user, index, subindex, size, true);
     (void)now;
-    return BootOd_CheckDownload(user, index, subindex, size, true);
+    if (abort_code != 0U) {
+        return abort_code;
+    }
+    if ((index == 0x1F50U) && (subindex == 1U)) {
+        od->container_size = size;
+        od->container_received = 0U;
+        od->container_active = true;
+        od->container_manifest_ready = false;
+        memset(od->container_manifest, 0, sizeof(od->container_manifest));
+    }
+    return 0U;
 }
 
 uint32_t BootOd_StreamWrite(void *user, uint16_t index, uint8_t subindex,
@@ -414,8 +487,92 @@ uint32_t BootOd_StreamWrite(void *user, uint16_t index, uint8_t subindex,
 {
     BootOd *od = (BootOd *)user;
     if ((index == 0x1F50U) && (subindex == 1U)) {
-        index = 0x2002U;
-        subindex = 0U;
+        uint32_t header_count;
+        uint32_t consumed = 0U;
+        BlImageManifest manifest;
+        FirmwareUpdateResult begin_result;
+        if ((od == NULL) || !od->container_active || (data == NULL) ||
+            (size == 0U) ||
+            (od->container_received > od->container_size) ||
+            (size > od->container_size - od->container_received)) {
+            return CO_ABORT_LENGTH;
+        }
+        if (!od->container_manifest_ready) {
+            header_count = BL_MANIFEST_RECORD_SIZE - od->container_received;
+            if (header_count > size) {
+                header_count = size;
+            }
+            memcpy(&od->container_manifest[od->container_received], data,
+                   header_count);
+            consumed = header_count;
+            if ((od->container_received + header_count) ==
+                BL_MANIFEST_RECORD_SIZE) {
+                uint32_t expected_size;
+                if (!BlManifest_Decode(od->container_manifest,
+                                       BL_MANIFEST_RECORD_SIZE, &manifest) ||
+                    (manifest.image_size > BL_SLOT_IMAGE_MAX)) {
+                    return CO_ABORT_VALUE;
+                }
+                expected_size = BL_MANIFEST_RECORD_SIZE + manifest.image_size;
+                if (expected_size != od->container_size) {
+                    return CO_ABORT_LENGTH;
+                }
+                if (!BootloaderInterface_ValidateFirmware(
+                        od->bootloader,
+                        (uint8_t)(od->bootloader->active_slot ^ 1U),
+                        &manifest)) {
+                    return CO_ABORT_VALUE;
+                }
+                od->manifest = manifest;
+                memcpy(od->manifest_record, od->container_manifest,
+                       sizeof(od->manifest_record));
+                od->manifest_valid = true;
+                {
+                    PsData candidate = *od->persistent;
+                    candidate.update_state = BL_TX_RECEIVING;
+                    candidate.pending_slot = 1U;
+                    candidate.pending_version = manifest.version;
+                    candidate.firmware_size = manifest.image_size;
+                    candidate.firmware_crc = manifest.image_crc;
+                    candidate.update_result = FWU_RESULT_NONE;
+                    if (Ps_Save(od->store, &candidate) != PS_OK) {
+                        return CO_ABORT_HARDWARE;
+                    }
+                    *od->persistent = candidate;
+                }
+                begin_result = FirmwareUpdate_Begin(od->update, &manifest, now);
+                if (begin_result != FWU_RESULT_NONE) {
+                    uint32_t result = (od->update->result == FWU_RESULT_NONE) ?
+                        (uint32_t)begin_result :
+                        (uint32_t)od->update->result;
+                    if (!clearReceivingState(od, result)) {
+                        return CO_ABORT_HARDWARE;
+                    }
+                    return (begin_result == FWU_RESULT_INCOMPATIBLE_IMAGE) ?
+                        CO_ABORT_VALUE : CO_ABORT_HARDWARE;
+                }
+                od->container_manifest_ready = true;
+                if (od->bootloader->platform.get_time_ms != NULL) {
+                    od->update->last_activity = odTimeMs(od);
+                }
+            } else {
+                od->container_received += size;
+                return 0U;
+            }
+        }
+        if (consumed < size) {
+            FirmwareUpdateResult result = FirmwareUpdate_Write(
+                od->update, &data[consumed], size - consumed,
+                (od->bootloader->platform.get_time_ms != NULL) ?
+                    odTimeMs(od) : now);
+            if (result != FWU_RESULT_NONE) {
+                return (result == FWU_RESULT_TIMEOUT) ? CO_ABORT_TIMEOUT :
+                    ((result == FWU_RESULT_SIZE) ? CO_ABORT_LENGTH :
+                     CO_ABORT_HARDWARE);
+            }
+        }
+        od->container_received += size;
+        return 0U;
     }
     if ((index != 0x2002U) || (subindex != 0U) || (od == NULL)) {
         return CO_ABORT_ACCESS;
@@ -438,10 +595,29 @@ uint32_t BootOd_StreamEnd(void *user, uint16_t index, uint8_t subindex,
                           uint32_t size, uint32_t now)
 {
     BootOd *od = (BootOd *)user;
-    (void)now;
     if ((index == 0x1F50U) && (subindex == 1U)) {
-        index = 0x2002U;
-        subindex = 0U;
+        FirmwareUpdateResult result;
+        if ((od == NULL) || !od->container_active ||
+            !od->container_manifest_ready ||
+            (od->container_received != size) ||
+            (size != od->container_size) ||
+            (od->update->received != od->manifest.image_size)) {
+            return CO_ABORT_LENGTH;
+        }
+        result = FirmwareUpdate_Finish(
+            od->update,
+            (od->bootloader->platform.get_time_ms != NULL) ?
+                odTimeMs(od) : now);
+        if (result != FWU_RESULT_NONE) {
+            return CO_ABORT_HARDWARE;
+        }
+        od->container_active = false;
+        od->container_manifest_ready = false;
+        od->container_size = 0U;
+        od->container_received = 0U;
+        memset(od->container_manifest, 0, sizeof(od->container_manifest));
+        (void)now;
+        return 0U;
     }
     if ((od == NULL) || (index != 0x2002U) || (subindex != 0U) ||
         (od->update->received != size)) {
@@ -454,26 +630,34 @@ void BootOd_StreamAbort(void *user, uint16_t index, uint8_t subindex)
 {
     BootOd *od = (BootOd *)user;
     if ((index == 0x1F50U) && (subindex == 1U)) {
-        index = 0x2002U;
-        subindex = 0U;
-    }
-    if ((od != NULL) && (index == 0x2002U) && (subindex == 0U) &&
-        (od->update->state == FWU_RECEIVING)) {
-        (void)FirmwareUpdate_Cancel(od->update);
-        if ((od->persistent->update_state == BL_TX_RECEIVING) &&
-            (od->store != NULL)) {
-            PsData candidate = *od->persistent;
-            candidate.update_state = BL_TX_IDLE;
-            candidate.pending_slot = UINT32_MAX;
-            candidate.pending_version = 0U;
-            candidate.update_result = FWU_RESULT_CANCELLED;
-            candidate.boot_request = 0U;
-            candidate.boot_node_id = 0U;
-            candidate.boot_bitrate = 0U;
-            candidate.boot_protocol = 0U;
-            if (Ps_Save(od->store, &candidate) == PS_OK) {
-                *od->persistent = candidate;
-            }
+        if (od == NULL) {
+            return;
         }
+        od->container_active = false;
+        od->container_manifest_ready = false;
+        od->container_size = 0U;
+        od->container_received = 0U;
+        memset(od->container_manifest, 0, sizeof(od->container_manifest));
+        if (od->update->state == FWU_RECEIVING) {
+            (void)FirmwareUpdate_Cancel(od->update);
+        }
+        if (od->persistent->update_state == BL_TX_RECEIVING) {
+            (void)clearReceivingState(od,
+                (od->update->result == FWU_RESULT_NONE) ?
+                FWU_RESULT_CANCELLED : (uint32_t)od->update->result);
+        }
+        od->manifest_valid = false;
+        return;
+    }
+    if ((od != NULL) && (index == 0x2002U) && (subindex == 0U)) {
+        if (od->update->state == FWU_RECEIVING) {
+            (void)FirmwareUpdate_Cancel(od->update);
+        }
+        if (od->persistent->update_state == BL_TX_RECEIVING) {
+            (void)clearReceivingState(
+                od, (od->update->result == FWU_RESULT_NONE) ?
+                FWU_RESULT_CANCELLED : (uint32_t)od->update->result);
+        }
+        od->manifest_valid = false;
     }
 }

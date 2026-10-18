@@ -13,6 +13,17 @@ static void makeReply(CoSdo *sdo, CoFrame *reply, uint8_t command)
     reply->data[0] = command;
 }
 
+static uint32_t currentTime(const CoSdo *sdo, uint32_t fallback)
+{
+    return (sdo->ops.get_time_ms != NULL) ?
+        sdo->ops.get_time_ms(sdo->ops.user) : fallback;
+}
+
+static bool forceStream(const CoSdo *sdo)
+{
+    return (sdo->index == 0x1F50U) && (sdo->subindex == 1U);
+}
+
 void CoSdo_Reset(CoSdo *sdo)
 {
     if (sdo != NULL) {
@@ -84,7 +95,7 @@ static uint32_t startUpload(CoSdo *sdo, const CoFrame *request,
         sdo->size = size;
         sdo->offset = 0U;
         sdo->toggle = 0U;
-        sdo->last_activity = now;
+        sdo->last_activity = currentTime(sdo, now);
     } else {
         abortTransfer(sdo, reply, CO_ABORT_NO_RESOURCE);
     }
@@ -134,7 +145,8 @@ static uint32_t startDownload(CoSdo *sdo, const CoFrame *request,
         reply->data[3] = sdo->subindex;
         return 0U;
     }
-    if ((size_known == false) || (size > CO_SDO_BUFFER_SIZE)) {
+    if ((size_known == false) || (size > CO_SDO_BUFFER_SIZE) ||
+        forceStream(sdo)) {
         if ((sdo->ops.stream_begin == NULL) ||
             (sdo->ops.stream_write == NULL) ||
             (sdo->ops.stream_end == NULL)) {
@@ -152,7 +164,7 @@ static uint32_t startDownload(CoSdo *sdo, const CoFrame *request,
         sdo->state = CO_SDO_DOWNLOAD;
     }
     sdo->size = size;
-    sdo->last_activity = now;
+    sdo->last_activity = currentTime(sdo, now);
     makeReply(sdo, reply, 0x60U);
     Co_Put16(&reply->data[1], sdo->index);
     reply->data[3] = sdo->subindex;
@@ -181,7 +193,7 @@ static bool uploadSegment(CoSdo *sdo, const CoFrame *request,
     memcpy(&reply->data[1], &sdo->buffer[sdo->offset], count);
     sdo->offset += count;
     sdo->toggle ^= 0x10U;
-    sdo->last_activity = now;
+    sdo->last_activity = currentTime(sdo, now);
     if (last) {
         CoSdo_Reset(sdo);
     }
@@ -232,7 +244,7 @@ static bool downloadSegment(CoSdo *sdo, const CoFrame *request,
     }
     sdo->offset += count;
     sdo->toggle ^= 0x10U;
-    sdo->last_activity = now;
+    sdo->last_activity = currentTime(sdo, now);
     makeReply(sdo, reply, (uint8_t)(0x20U | (sdo->toggle ^ 0x10U)));
     if (last) {
         CoSdo_Reset(sdo);
@@ -275,7 +287,8 @@ static void startBlockDownload(CoSdo *sdo, const CoFrame *request,
     code = sdo->ops.check_download(sdo->ops.user, sdo->index,
                                   sdo->subindex, sdo->size, true);
     if ((code == 0U) && (sdo->size == 0U)) { code = CO_ABORT_LENGTH; }
-    if ((code == 0U) && (sdo->size > CO_SDO_BUFFER_SIZE)) {
+    if ((code == 0U) &&
+        ((sdo->size > CO_SDO_BUFFER_SIZE) || forceStream(sdo))) {
         if ((sdo->ops.stream_begin == NULL) || (sdo->ops.stream_write == NULL) ||
             (sdo->ops.stream_end == NULL)) {
             code = CO_ABORT_NO_RESOURCE;
@@ -292,7 +305,7 @@ static void startBlockDownload(CoSdo *sdo, const CoFrame *request,
     sdo->block_crc = 0U;
     sdo->block_crc_enabled = (command & 4U) != 0U;
     sdo->state = CO_SDO_BLOCK_DOWNLOAD;
-    sdo->last_activity = now;
+    sdo->last_activity = currentTime(sdo, now);
     makeReply(sdo, reply, sdo->block_crc_enabled ? 0xA4U : 0xA0U);
     Co_Put16(&reply->data[1], sdo->index);
     reply->data[3] = sdo->subindex;
@@ -350,6 +363,9 @@ static bool blockDownload(CoSdo *sdo, const CoFrame *request,
     if (sdo->block_stream) {
         code = sdo->ops.stream_write(sdo->ops.user, sdo->index,
                                      sdo->subindex, &request->data[1], count, now);
+        if (code == 0U) {
+            sdo->last_activity = currentTime(sdo, now);
+        }
     } else {
         memcpy(&sdo->buffer[sdo->offset], &request->data[1], count);
     }
@@ -400,7 +416,7 @@ bool CoSdo_Receive(CoSdo *sdo, const CoFrame *request, uint32_t now,
         return false;
     }
     if (sdo->state != CO_SDO_IDLE) {
-        sdo->last_activity = now;
+        sdo->last_activity = currentTime(sdo, now);
     }
     if ((sdo->state == CO_SDO_BLOCK_DOWNLOAD) ||
         (sdo->state == CO_SDO_BLOCK_END)) {

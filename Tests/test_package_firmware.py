@@ -1,6 +1,10 @@
 import struct
+import shutil
 import unittest
+import uuid
 import zlib
+import zipfile
+from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -8,6 +12,7 @@ from Tools.package_firmware import (
     MANIFEST_COMMIT,
     MANIFEST_MAGIC,
     PackageError,
+    _write_outputs,
     make_signed_manifest,
     validate_image,
 )
@@ -87,6 +92,47 @@ class PackageFirmwareTests(unittest.TestCase):
                 hardware_max=9,
                 private_key=Ed25519PrivateKey.generate(),
             )
+
+    def test_writes_signed_update_container_and_preserves_existing_outputs(self) -> None:
+        image = valid_test_image()
+        manifest = make_signed_manifest(
+            image=image,
+            version=7,
+            vendor_id=1,
+            product_code=2,
+            hardware_variant=3,
+            hardware_min=0x00010000,
+            hardware_max=0x00020005,
+            private_key=Ed25519PrivateKey.generate(),
+        )
+        directory = Path(__file__).parent / (".package-" + uuid.uuid4().hex)
+        directory.mkdir()
+        try:
+            prefix = directory / "firmware"
+            manifest_path, package_path, update_path = _write_outputs(
+                Path("firmware.bin"),
+                prefix,
+                image,
+                manifest,
+                {"image_size": len(image)},
+                False,
+            )
+            self.assertEqual(manifest_path.read_bytes(), manifest)
+            self.assertEqual(update_path.read_bytes(), manifest + image)
+            with zipfile.ZipFile(package_path) as archive:
+                self.assertEqual(
+                    sorted(archive.namelist()),
+                    ["firmware.bin", "manifest.bin", "package.json"],
+                )
+            with self.assertRaises(PackageError):
+                _write_outputs(
+                    Path("firmware.bin"), prefix, image, manifest, {}, False
+                )
+            _write_outputs(
+                Path("firmware.bin"), prefix, image, manifest, {}, True
+            )
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
 
 
 if __name__ == "__main__":

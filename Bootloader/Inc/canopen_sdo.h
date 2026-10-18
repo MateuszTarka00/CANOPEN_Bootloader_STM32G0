@@ -33,6 +33,7 @@ typedef struct {
     uint32_t (*stream_end)(void *user, uint16_t index, uint8_t subindex,
                            uint32_t size, uint32_t now);
     void (*stream_abort)(void *user, uint16_t index, uint8_t subindex);
+    uint32_t (*get_time_ms)(void *user);
 } CoSdoOps;
 
 typedef struct {

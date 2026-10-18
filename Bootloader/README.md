@@ -47,13 +47,26 @@ bootloader Node-ID 126. The manual screenshot shows block download to
 contains the application's Node-ID. SDO request/reply IDs are `0x67E`/`0x5FE`;
 heartbeat is `0x77E`. Keep this address free of other devices during service.
 
-`0x1F50:00` reads as U8 count 1; `0x1F50:01` is a write-only alias for the
-existing image domain. It requires a valid manifest uploaded to `0x2008:00`
-and successful vendor begin (`0x2000:00=1`) first. Completion acknowledges
-transport only: vendor verify (`2`) and activate (`3`) remain mandatory.
-No control values for `0x1F51`, unlock password, device-type constant or
-unknown binary-file header are invented. Full wizard interoperability is
-NOT implemented or claimed. ZIP files must not be sent as firmware data.
+`0x1F50:00` reads as U8 count 1. `0x1F50:01` is a write-only,
+self-describing update-container stream: exactly 152 bytes of signed manifest
+followed by the raw Slot-A-linked image. The SDO length covers both parts.
+The receiver buffers and validates the complete manifest (record CRC/commit,
+Ed25519 signature, hardware compatibility, and exact declared image length)
+before erasing the inactive slot. It then streams the image, checks transfer
+CRC, read-back digest and image validity, and leaves the persistent update
+state VERIFIED. It does not schedule activation; normal trial/rollback rules
+still require a separate activation policy. Small containers use the streaming
+path too. Both segmented and block SDO downloads are supported, including a
+manifest that crosses segment boundaries.
+
+The vendor path remains available: upload `manifest.bin` to `0x2008:00`, write
+`0x2000:00=1`, download only the raw image to `0x2002:00`, then explicitly
+finish (`2`) and schedule activation (`3`). This path is unchanged. No control
+values for `0x1F51`, unlock password, device-type constant or undocumented
+LiftAppTool envelope are invented. This protocol work is not a claim of full
+LiftAppTool wizard interoperability. ZIP files must never be sent as firmware
+data; use the generated `.update.bin` only for its documented 1F50 container
+transfer, or use the existing ZIP-aware PC client for the vendor path.
 
 Block download requires a declared nonzero size and negotiates one segment
 per sub-block (a permitted block size), so Flash writes finish before the next
@@ -147,6 +160,7 @@ The SDO server implements:
 | `0x2000:00` | RW, U8 | Control: `0` cancel, `1` begin, `2` verify/finish, `3` schedule activation |
 | `0x2001:00` | RO, U8 | Public update state |
 | `0x2002:00` | WO, DOMAIN | Sequential firmware payload, segmented SDO download |
+| `0x1F50:01` | WO, DOMAIN | 152-byte signed manifest followed by image; automatic verify to VERIFIED, no activation |
 | `0x2003:00` | RO, U32 | Firmware CRC-32 |
 | `0x2004:00` | RO, U32 | Firmware payload size |
 | `0x2005:00` | RO, U32 | Pending version |

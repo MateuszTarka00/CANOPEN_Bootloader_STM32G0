@@ -67,7 +67,9 @@ FirmwareUpdateResult FirmwareUpdate_Begin(FirmwareUpdate *update,
         return update->result;
     }
     update->manifest = *manifest;
-    update->last_activity = now;
+    update->last_activity = (update->bootloader->platform.get_time_ms != NULL) ?
+        update->bootloader->platform.get_time_ms(
+            update->bootloader->platform.user) : now;
     update->state = FWU_RECEIVING;
     return FWU_RESULT_NONE;
 }

@@ -6,7 +6,7 @@ import argparse
 import struct
 import subprocess
 import sys
-import tempfile
+import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,8 +42,11 @@ def main() -> None:
         ROOT / "ThirdParty" / "Monocypher" / "src" / "monocypher.c",
         ROOT / "ThirdParty" / "Monocypher" / "src" / "optional" / "monocypher-ed25519.c",
     ]
-    with tempfile.TemporaryDirectory(prefix="boot-native-") as temporary:
-        output = Path(temporary)
+    output = ROOT / "Tests" / ".native-build"
+    if output.exists():
+        shutil.rmtree(output)
+    output.mkdir()
+    try:
         for name in ("test_bootloader", "verify_manifest"):
             executable = output / (name + ".exe")
             subprocess.run(flags + [str(ROOT / "Tests" / (name + ".c"))]
@@ -97,6 +100,8 @@ def main() -> None:
                 + ["-o", str(executable)], check=True,
             )
             subprocess.run([str(executable)], check=True)
+    finally:
+        shutil.rmtree(output, ignore_errors=True)
     print("Python signer -> C Monocypher verifier: valid accepted, modified inputs rejected.")
 
 

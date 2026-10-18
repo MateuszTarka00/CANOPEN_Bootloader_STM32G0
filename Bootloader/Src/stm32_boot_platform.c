@@ -362,6 +362,12 @@ static bool jump(void *user, uint32_t vector_address)
     __builtin_unreachable();
 }
 
+static uint32_t getTimeMs(void *user)
+{
+    (void)user;
+    return HAL_GetTick();
+}
+
 static void readFactory(FiData *factory, bool *valid)
 {
     FiResult result;
@@ -484,6 +490,7 @@ BlPlatform BlStm32_Platform(BlStm32Context *context)
     platform.activate = activate;
     platform.rollback = rollback;
     platform.jump = jump;
+    platform.get_time_ms = getTimeMs;
     return platform;
 }
 

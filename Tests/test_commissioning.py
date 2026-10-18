@@ -1,8 +1,8 @@
 import contextlib
 import io
 import struct
-import tempfile
 import unittest
+import shutil
 import uuid
 import zipfile
 import zlib
@@ -100,9 +100,9 @@ class UpdateServer(can.Listener):
 
 class CommissioningTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(__file__).parent / (".commissioning-" + uuid.uuid4().hex)
+        self.root.mkdir()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         self.key = Ed25519PrivateKey.generate()
         self.public = self.key.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw)

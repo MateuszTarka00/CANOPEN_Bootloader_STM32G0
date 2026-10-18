@@ -79,6 +79,10 @@ typedef struct {
     uint32_t activate_count;
     uint32_t rollback_count;
     uint32_t jump_count;
+    uint32_t now_ms;
+    uint32_t erase_advance_ms;
+    PsData *persistent;
+    bool time_enabled;
     bool fail_read;
     bool fail_erase;
     bool fail_program;
@@ -189,6 +193,7 @@ static bool fakeErase(void *user, uint32_t address, uint32_t size)
     }
     memset(&flash->bytes[offset], 0xFF, size);
     flash->erase_count++;
+    flash->now_ms += flash->erase_advance_ms;
     return true;
 }
 
@@ -245,6 +250,14 @@ static bool markPending(void *user, uint8_t slot, const BlImageManifest *manifes
         return false;
     }
     flash->pending_count++;
+    if (flash->persistent != NULL) {
+        flash->persistent->update_state = BL_TX_VERIFIED;
+        flash->persistent->pending_slot = 1U;
+        flash->persistent->pending_version = manifest->version;
+        flash->persistent->firmware_size = manifest->image_size;
+        flash->persistent->firmware_crc = manifest->image_crc;
+        flash->persistent->update_result = 0U;
+    }
     return true;
 }
 
@@ -274,6 +287,11 @@ static bool jump(void *user, uint32_t address)
     return true;
 }
 
+static uint32_t fakeTime(void *user)
+{
+    return ((FakeFlash *)user)->now_ms;
+}
+
 static BlPlatform makePlatform(FakeFlash *flash)
 {
     BlPlatform platform;
@@ -289,6 +307,9 @@ static BlPlatform makePlatform(FakeFlash *flash)
     platform.activate = activate;
     platform.rollback = rollback;
     platform.jump = jump;
+    if (flash->time_enabled) {
+        platform.get_time_ms = fakeTime;
+    }
     return platform;
 }
 
@@ -660,7 +681,7 @@ static void sdoBlockImage(CoSdo *sdo, const uint8_t *image, uint32_t size)
     uint32_t offset;
     request.id = (uint16_t)(0x600U + sdo->node_id); request.length = 8U;
     request.data[0] = 0xC2U;
-    Co_Put16(&request.data[1], 0x1F50U); request.data[3] = 1U;
+    Co_Put16(&request.data[1], 0x2002U); request.data[3] = 0U;
     Co_Put32(&request.data[4], size);
     assert(CoSdo_Receive(sdo, &request, 20U, &reply));
     assert(reply.data[0] == 0xA0U && reply.data[4] == 1U);
@@ -791,6 +812,277 @@ static void testObjectDictionaryAndSdo(uint32_t image_size)
     puts("OD identity, heartbeat, segmented upload/download, toggle, timeout and image domain OK");
 }
 
+static void initContainerFixture(FakeFlash *flash, FakeNvm *nvm, PsStore *store,
+                                 PsData *persistent,
+                                 BootloaderInterface *bootloader,
+                                 FirmwareUpdate *update, FiData *factory,
+                                 BootOd *od, CoSdo *sdo)
+{
+    PsIo io = {nvm, fakeNvmRead, fakeNvmErase, fakeNvmWrite};
+    CoSdoOps ops;
+    assert(initialize(flash, bootloader));
+    flash->time_enabled = true;
+    assert(reopen(flash, bootloader));
+    memset(nvm, 0xFF, sizeof(*nvm));
+    memset(persistent, 0, sizeof(*persistent));
+    persistent->pending_slot = UINT32_MAX;
+    persistent->heartbeat_ms = 1000U;
+    Ps_Init(store, &io);
+    assert(Ps_Load(store, persistent) == PS_EMPTY);
+    memset(persistent, 0, sizeof(*persistent));
+    persistent->pending_slot = UINT32_MAX;
+    persistent->heartbeat_ms = 1000U;
+    assert(Ps_Save(store, persistent) == PS_OK);
+    flash->persistent = persistent;
+    *factory = makeFactory();
+    assert(FirmwareUpdate_Init(update, bootloader, 5000U));
+    BootOd_Init(od, bootloader, update, NULL, store, persistent, factory,
+                NULL, 126U, true);
+    ops = BootOd_SdoOps(od);
+    CoSdo_Init(sdo, 126U, &ops);
+}
+
+static void makeContainer(const uint8_t *image, uint32_t image_size,
+                          BlImageManifest *manifest,
+                          uint8_t record[BL_MANIFEST_RECORD_SIZE],
+                          uint8_t *container)
+{
+    *manifest = makeManifest(image, image_size);
+    assert(BlManifest_Encode(manifest, record));
+    memcpy(container, record, BL_MANIFEST_RECORD_SIZE);
+    memcpy(&container[BL_MANIFEST_RECORD_SIZE], image, image_size);
+}
+
+static bool startContainer(CoSdo *sdo, uint32_t total_size, uint32_t now,
+                           CoFrame *reply)
+{
+    CoFrame request = {0};
+    request.id = 0x67EU;
+    request.length = 8U;
+    request.data[0] = 0x21U;
+    Co_Put16(&request.data[1], 0x1F50U);
+    request.data[3] = 1U;
+    Co_Put32(&request.data[4], total_size);
+    return CoSdo_Receive(sdo, &request, now, reply);
+}
+
+static uint32_t sendContainerSegments(CoSdo *sdo, const uint8_t *container,
+                                      uint32_t total_size, uint32_t limit,
+                                      uint32_t now)
+{
+    CoFrame request = {0}, reply;
+    uint32_t offset;
+    uint8_t toggle = 0U;
+    if (!startContainer(sdo, total_size, now, &reply)) {
+        return UINT32_MAX;
+    }
+    if (reply.data[0] == 0x80U) {
+        return Co_Get32(&reply.data[4]);
+    }
+    for (offset = 0U; offset < limit; offset += 7U) {
+        uint32_t count = ((total_size - offset) > 7U) ?
+            7U : total_size - offset;
+        bool last = (offset + count) == total_size;
+        request.id = 0x67EU;
+        request.length = 8U;
+        memset(request.data, 0, sizeof(request.data));
+        request.data[0] = (uint8_t)(toggle |
+            ((7U - count) << 1U) | (last ? 1U : 0U));
+        memcpy(&request.data[1], &container[offset], count);
+        if (!CoSdo_Receive(sdo, &request, now + offset + 1U, &reply)) {
+            return UINT32_MAX;
+        }
+        if (reply.data[0] == 0x80U) {
+            return Co_Get32(&reply.data[4]);
+        }
+        toggle ^= 0x10U;
+    }
+    return 0U;
+}
+
+static uint16_t testBlockCrc(uint16_t crc, const uint8_t *data, uint32_t size)
+{
+    uint32_t i;
+    for (i = 0U; i < size; ++i) {
+        uint8_t bit;
+        crc ^= (uint16_t)((uint16_t)data[i] << 8U);
+        for (bit = 0U; bit < 8U; ++bit) {
+            crc = (uint16_t)(((crc & 0x8000U) != 0U) ?
+                ((uint32_t)crc << 1U) ^ 0x1021U : (uint32_t)crc << 1U);
+        }
+    }
+    return crc;
+}
+
+static uint32_t sendContainerBlock(CoSdo *sdo, const uint8_t *container,
+                                   uint32_t size, bool corrupt_crc)
+{
+    CoFrame request = {0}, reply;
+    uint32_t offset;
+    uint16_t crc = 0U;
+    request.id = 0x67EU;
+    request.length = 8U;
+    request.data[0] = 0xC6U;
+    Co_Put16(&request.data[1], 0x1F50U);
+    request.data[3] = 1U;
+    Co_Put32(&request.data[4], size);
+    assert(CoSdo_Receive(sdo, &request, 0U, &reply));
+    if (reply.data[0] == 0x80U) {
+        return Co_Get32(&reply.data[4]);
+    }
+    for (offset = 0U; offset < size; offset += 7U) {
+        uint32_t count = size - offset;
+        bool last;
+        if (count > 7U) { count = 7U; }
+        last = offset + count == size;
+        crc = testBlockCrc(crc, &container[offset], count);
+        request.data[0] = last ? 0x81U : 1U;
+        memcpy(&request.data[1], &container[offset], count);
+        if (count < 7U) {
+            memset(&request.data[count + 1U], 0, 7U - count);
+        }
+        assert(CoSdo_Receive(sdo, &request, offset + 1U, &reply));
+        if (reply.data[0] == 0x80U) {
+            return Co_Get32(&reply.data[4]);
+        }
+    }
+    request.data[0] = (uint8_t)(0xC1U |
+        (((7U - size % 7U) % 7U) << 2U));
+    Co_Put16(&request.data[1], (uint16_t)(crc ^ (corrupt_crc ? 1U : 0U)));
+    assert(CoSdo_Receive(sdo, &request, size + 1U, &reply));
+    return (reply.data[0] == 0x80U) ? Co_Get32(&reply.data[4]) : 0U;
+}
+
+static void testSignedContainerDownloads(void)
+{
+    FakeFlash flash;
+    FakeNvm nvm;
+    PsStore store;
+    PsData persistent;
+    BootloaderInterface bootloader;
+    FirmwareUpdate update;
+    FiData factory;
+    BootOd od;
+    CoSdo sdo;
+    CoFrame reply;
+    uint8_t image[64];
+    uint8_t container[BL_MANIFEST_RECORD_SIZE + sizeof(image)];
+    uint8_t record[BL_MANIFEST_RECORD_SIZE];
+    BlImageManifest manifest;
+    uint32_t abort_code;
+    uint32_t i;
+
+    memset(image, 0x5AU, sizeof(image));
+    makeContainer(image, sizeof(image), &manifest, record, container);
+    initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                         &update, &factory, &od, &sdo);
+    flash.now_ms = 100U;
+    flash.erase_advance_ms = 1500U;
+    abort_code = sendContainerSegments(&sdo, container, sizeof(container),
+                                       sizeof(container), 100U);
+    assert(abort_code == 0U);
+    assert(update.state == FWU_PENDING && persistent.update_state == BL_TX_VERIFIED);
+    assert(persistent.pending_slot == 1U && flash.pending_count == 1U);
+    assert(flash.activate_count == 0U && flash.erase_count == 1U);
+    assert(sdo.state == CO_SDO_IDLE);
+
+    {
+        uint8_t small_image[8];
+        uint8_t small_container[BL_MANIFEST_RECORD_SIZE + sizeof(small_image)];
+        memset(small_image, 0xA6, sizeof(small_image));
+        makeContainer(small_image, sizeof(small_image), &manifest, record,
+                      small_container);
+        initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                             &update, &factory, &od, &sdo);
+        assert(sendContainerBlock(&sdo, small_container,
+                                  sizeof(small_container), false) == 0U);
+        assert(update.state == FWU_PENDING &&
+               persistent.update_state == BL_TX_VERIFIED);
+        assert(flash.pending_count == 1U && flash.activate_count == 0U);
+
+        initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                             &update, &factory, &od, &sdo);
+        assert(sendContainerBlock(&sdo, small_container,
+                                  sizeof(small_container), true) == CO_ABORT_CRC);
+        assert(update.state == FWU_IDLE && persistent.update_state == BL_TX_IDLE);
+        assert(flash.pending_count == 0U && flash.activate_count == 0U);
+    }
+
+    for (i = 0U; i < 5U; ++i) {
+        makeContainer(image, sizeof(image), &manifest, record, container);
+        if (i == 0U) {
+            record[140] ^= 1U;
+            memcpy(container, record, sizeof(record));
+        } else if (i == 1U) {
+            flash.fail_manifest = true;
+        } else if (i == 2U) {
+            manifest.image_size--;
+            assert(BlManifest_Encode(&manifest, record));
+            memcpy(container, record, sizeof(record));
+        } else if (i == 3U) {
+            manifest.compatibility.hardware_min = UINT32_C(0x00010004);
+            manifest.compatibility.hardware_max = UINT32_C(0x00010004);
+            assert(BlManifest_Encode(&manifest, record));
+            memcpy(container, record, sizeof(record));
+        } else {
+            record[0] ^= 1U;
+            Co_Put32(&record[140], Ps_Crc(record, 140U));
+            memcpy(container, record, sizeof(record));
+        }
+        initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                             &update, &factory, &od, &sdo);
+        if (i == 1U) {
+            flash.fail_manifest = true;
+        }
+        abort_code = sendContainerSegments(&sdo, container, sizeof(container),
+                                           sizeof(container), 0U);
+        assert(abort_code == ((i == 2U) ? CO_ABORT_LENGTH : CO_ABORT_VALUE));
+        assert(flash.erase_count == 0U && persistent.update_state == BL_TX_IDLE);
+        assert(!od.container_active && sdo.state == CO_SDO_IDLE);
+    }
+
+    makeContainer(image, sizeof(image), &manifest, record, container);
+    container[BL_MANIFEST_RECORD_SIZE + 5U] ^= 0x01U;
+    initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                         &update, &factory, &od, &sdo);
+    assert(sendContainerSegments(&sdo, container, sizeof(container),
+                                 sizeof(container), 0U) == CO_ABORT_HARDWARE);
+    assert(flash.erase_count == 1U && flash.pending_count == 0U);
+    assert(persistent.update_state == BL_TX_IDLE && update.state == FWU_FAILED);
+    assert(flash.activate_count == 0U);
+
+    makeContainer(image, sizeof(image), &manifest, record, container);
+    initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                         &update, &factory, &od, &sdo);
+    flash.now_ms = 100U;
+    flash.erase_advance_ms = 1500U;
+    assert(sendContainerSegments(&sdo, container, sizeof(container), 154U,
+                                 100U) == 0U);
+    assert(sdo.last_activity == 1600U);
+    assert(!CoSdo_Poll(&sdo, sdo.last_activity + 999U, &reply));
+    assert(CoSdo_Poll(&sdo, sdo.last_activity + sdo.timeout_ms, &reply));
+    assert(Co_Get32(&reply.data[4]) == CO_ABORT_TIMEOUT);
+    assert(update.state == FWU_IDLE && persistent.update_state == BL_TX_IDLE);
+    assert(flash.pending_count == 0U && flash.activate_count == 0U);
+
+    makeContainer(image, sizeof(image), &manifest, record, container);
+    initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                         &update, &factory, &od, &sdo);
+    assert(startContainer(&sdo, sizeof(container), 0U, &reply));
+    {
+        CoFrame request = {0};
+        request.id = 0x67EU;
+        request.length = 8U;
+        request.data[0] = 0x80U;
+        Co_Put16(&request.data[1], 0x1F50U);
+        request.data[3] = 1U;
+        assert(!CoSdo_Receive(&sdo, &request, 1U, &reply));
+    }
+    assert(!od.container_active && flash.erase_count == 0U);
+    assert(persistent.update_state == BL_TX_IDLE);
+    puts("Signed 1F50 container: segmented/block, small images, validation-before-erase, CRC, cancel and timeout recovery OK");
+}
+
 typedef struct {
     uint8_t data[DEVICE_IMAGE_MAX];
     uint32_t written;
@@ -903,7 +1195,7 @@ static void testBlockDownload(void)
         for (offset = 0U; offset < transfer_size; ++offset) {
             assert(sink.data[offset] == (uint8_t)offset);
         }
-        assert(sink.completed == ((transfer_size > CO_SDO_BUFFER_SIZE) ? 1U : 0U));
+        assert(sink.completed == 1U);
     }
     /* CRC-16/XMODEM known vector, not a copy of the production CRC routine. */
     for (size = 0U; size < 2U; ++size) {
@@ -917,7 +1209,7 @@ static void testBlockDownload(void)
         Co_Put16(&request.data[1], (uint16_t)(0x31C3U ^ size));
         assert(CoSdo_Receive(&sdo, &request, 3U, &reply));
         assert(reply.data[0] == ((size == 0U) ? 0xA1U : 0x80U));
-        assert(sink.written == ((size == 0U) ? 9U : 0U));
+        assert(sink.written == 9U);
         if (size != 0U) { assert(Co_Get32(&reply.data[4]) == CO_ABORT_CRC); }
     }
     for (size = 0U; size < 5U; ++size) {
@@ -991,6 +1283,7 @@ int main(void)
     testRejectedAndInterruptedUpdates();
     testObjectDictionaryAndSdo(64U);
     testObjectDictionaryAndSdo(256U);
+    testSignedContainerDownloads();
     testBlockDownload();
     puts("All portable bootloader tests passed.");
     return 0;

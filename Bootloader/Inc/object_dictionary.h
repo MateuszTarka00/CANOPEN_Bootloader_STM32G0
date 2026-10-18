@@ -21,10 +21,15 @@ typedef struct {
     CoEmcy *emcy;
     BlImageManifest manifest;
     uint8_t manifest_record[BL_MANIFEST_RECORD_SIZE];
+    uint8_t container_manifest[BL_MANIFEST_RECORD_SIZE];
+    uint32_t container_size;
+    uint32_t container_received;
     uint8_t node_id;
     bool factory_valid;
     bool manifest_valid;
     bool update_auth_available;
+    bool container_active;
+    bool container_manifest_ready;
 } BootOd;
 
 void BootOd_Init(BootOd *od, BootloaderInterface *bootloader,
