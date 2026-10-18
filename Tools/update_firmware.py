@@ -112,6 +112,8 @@ def main() -> int:
     parser.add_argument("--interface", required=True, help="python-can backend, e.g. pcan")
     parser.add_argument("--channel", required=True, help="e.g. PCAN_USBBUS1")
     parser.add_argument("--node", type=int, default=1, choices=range(1, 128), metavar="1..127")
+    parser.add_argument("--boot-node", type=int, default=126, choices=range(1, 128),
+                        metavar="1..127", help="Bootloader Node-ID (default: 126)")
     parser.add_argument("--confirm-update", action="store_true",
                         help="Explicitly authorize application outage and firmware installation")
     args = parser.parse_args()
@@ -122,15 +124,27 @@ def main() -> int:
             args.package, read_firmware_public_key(DEFAULT_PUBLIC_KEY_HEADER)
         )
         with can.Bus(interface=args.interface, channel=args.channel, bitrate=250000,
-                     can_filters=[{"can_id": 0x581 + args.node - 1,
-                                   "can_mask": 0x7FF, "extended": False}]) as bus:
+                     can_filters=[{"can_id": 0x580 + node,
+                                   "can_mask": 0x7FF, "extended": False}
+                                  for node in {args.node, args.boot_node}]) as bus:
             client = SdoClient(bus, args.node)
-            mode = client.read(0x200A)
+            try:
+                mode = client.read(0x200A)
+            except TimeoutError:
+                if args.node == args.boot_node:
+                    raise
+                print(f"No application response at Node {args.node}; probing "
+                      f"bootloader Node {args.boot_node}. No writes retried.")
+                client.node = args.boot_node
+                mode = client.read(0x200A)
+                if mode != 1:
+                    raise SdoError("The bootloader address does not report bootloader mode.")
             if mode == 0:
                 if client.read(0x2009) != 2 or client.read(0x200B) != 1:
                     raise SdoError("Application does not advertise handoff protocol 2/capability.")
                 print("Requesting application -> bootloader handoff.")
                 client.write(0x2000, b"\x01")
+                client.node = args.boot_node
                 client.wait_mode(1, 15)
             elif mode != 1:
                 raise SdoError(f"Unknown execution mode {mode}.")
@@ -150,6 +164,7 @@ def main() -> int:
             client.write(0x2000, b"\x02")
             print("Image verified; scheduling activation.")
             client.write(0x2000, b"\x03")
+            client.node = args.node
             client.wait_mode(0, 120)
             actual = client.read(0x2006)
             expected = struct.unpack_from("<I", manifest, 16)[0]

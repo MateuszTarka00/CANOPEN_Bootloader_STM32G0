@@ -20,6 +20,10 @@ void CoSdo_Reset(CoSdo *sdo)
         sdo->toggle = 0U;
         sdo->size = 0U;
         sdo->offset = 0U;
+        sdo->block_stream = false;
+        sdo->block_crc = 0U;
+        sdo->block_tail_size = 0U;
+        sdo->block_crc_enabled = false;
     }
 }
 
@@ -29,7 +33,7 @@ static void abortTransfer(CoSdo *sdo, CoFrame *reply, uint32_t code)
     Co_Put16(&reply->data[1], sdo->index);
     reply->data[3] = sdo->subindex;
     Co_Put32(&reply->data[4], code);
-    if ((sdo->state == CO_SDO_STREAM_DOWNLOAD) &&
+    if (((sdo->state == CO_SDO_STREAM_DOWNLOAD) || sdo->block_stream) &&
         (sdo->ops.stream_abort != NULL)) {
         sdo->ops.stream_abort(sdo->ops.user, sdo->index, sdo->subindex);
     }
@@ -236,6 +240,135 @@ static bool downloadSegment(CoSdo *sdo, const CoFrame *request,
     return true;
 }
 
+static uint16_t blockCrc(uint16_t crc, const uint8_t *data, uint32_t size)
+{
+    uint32_t i;
+    for (i = 0U; i < size; ++i) {
+        uint8_t bit;
+        crc ^= (uint16_t)((uint16_t)data[i] << 8U);
+        for (bit = 0U; bit < 8U; ++bit) {
+            crc = (uint16_t)(((crc & 0x8000U) != 0U) ?
+                ((uint32_t)crc << 1U) ^ 0x1021U : ((uint32_t)crc << 1U));
+        }
+    }
+    return crc;
+}
+
+static void startBlockDownload(CoSdo *sdo, const CoFrame *request,
+                                uint32_t now, CoFrame *reply)
+{
+    uint32_t code;
+    uint8_t command = request->data[0];
+    sdo->index = Co_Get16(&request->data[1]);
+    sdo->subindex = request->data[3];
+    /* A bounded stream requires its length before any Flash operation. */
+    if ((command != 0xC2U) && (command != 0xC6U)) {
+        abortTransfer(sdo, reply, CO_ABORT_COMMAND);
+        return;
+    }
+    sdo->size = Co_Get32(&request->data[4]);
+    sdo->offset = 0U;
+    if ((sdo->ops.check_download == NULL) || (sdo->ops.write == NULL)) {
+        abortTransfer(sdo, reply, CO_ABORT_HARDWARE);
+        return;
+    }
+    code = sdo->ops.check_download(sdo->ops.user, sdo->index,
+                                  sdo->subindex, sdo->size, true);
+    if ((code == 0U) && (sdo->size == 0U)) { code = CO_ABORT_LENGTH; }
+    if ((code == 0U) && (sdo->size > CO_SDO_BUFFER_SIZE)) {
+        if ((sdo->ops.stream_begin == NULL) || (sdo->ops.stream_write == NULL) ||
+            (sdo->ops.stream_end == NULL)) {
+            code = CO_ABORT_NO_RESOURCE;
+        } else {
+            code = sdo->ops.stream_begin(sdo->ops.user, sdo->index,
+                                         sdo->subindex, sdo->size, now);
+            sdo->block_stream = (code == 0U);
+        }
+    }
+    if (code != 0U) {
+        abortTransfer(sdo, reply, code);
+        return;
+    }
+    sdo->block_crc = 0U;
+    sdo->block_crc_enabled = (command & 4U) != 0U;
+    sdo->state = CO_SDO_BLOCK_DOWNLOAD;
+    sdo->last_activity = now;
+    makeReply(sdo, reply, sdo->block_crc_enabled ? 0xA4U : 0xA0U);
+    Co_Put16(&reply->data[1], sdo->index);
+    reply->data[3] = sdo->subindex;
+    /* One segment per sub-block prevents Flash writes from overrunning RX FIFO. */
+    reply->data[4] = 1U;
+}
+
+static bool blockDownload(CoSdo *sdo, const CoFrame *request,
+                           uint32_t now, CoFrame *reply)
+{
+    uint8_t command = request->data[0];
+    uint32_t code = 0U;
+    uint32_t count;
+    if (sdo->state == CO_SDO_BLOCK_END) {
+        uint8_t unused = (uint8_t)((command >> 2U) & 7U);
+        if ((command & 0xE3U) != 0xC1U) {
+            abortTransfer(sdo, reply, CO_ABORT_COMMAND);
+            return true;
+        }
+        if ((7U - unused) != sdo->block_tail_size) {
+            abortTransfer(sdo, reply, CO_ABORT_LENGTH);
+            return true;
+        }
+        if (sdo->block_crc_enabled &&
+            (Co_Get16(&request->data[1]) != sdo->block_crc)) {
+            abortTransfer(sdo, reply, CO_ABORT_CRC);
+            return true;
+        }
+        if (sdo->block_stream) {
+            code = sdo->ops.stream_end(sdo->ops.user, sdo->index,
+                                       sdo->subindex, sdo->size, now);
+        } else {
+            code = sdo->ops.write(sdo->ops.user, sdo->index, sdo->subindex,
+                                  sdo->buffer, sdo->size, now);
+        }
+        if (code != 0U) {
+            abortTransfer(sdo, reply, code);
+        } else {
+            makeReply(sdo, reply, 0xA1U);
+            CoSdo_Reset(sdo);
+        }
+        return true;
+    }
+    if ((command & 0x7FU) != 1U) {
+        abortTransfer(sdo, reply, CO_ABORT_SEQUENCE);
+        return true;
+    }
+    count = sdo->size - sdo->offset;
+    if ((count == 0U) || (((command & 0x80U) == 0U) && (count <= 7U)) ||
+        (((command & 0x80U) != 0U) && (count > 7U))) {
+        abortTransfer(sdo, reply, CO_ABORT_LENGTH);
+        return true;
+    }
+    if (count > 7U) { count = 7U; }
+    if (sdo->block_stream) {
+        code = sdo->ops.stream_write(sdo->ops.user, sdo->index,
+                                     sdo->subindex, &request->data[1], count, now);
+    } else {
+        memcpy(&sdo->buffer[sdo->offset], &request->data[1], count);
+    }
+    if (code != 0U) {
+        abortTransfer(sdo, reply, code);
+        return true;
+    }
+    sdo->block_crc = blockCrc(sdo->block_crc, &request->data[1], count);
+    sdo->offset += count;
+    if ((command & 0x80U) != 0U) {
+        sdo->block_tail_size = (uint8_t)count;
+        sdo->state = CO_SDO_BLOCK_END;
+    }
+    makeReply(sdo, reply, 0xA2U);
+    reply->data[1] = 1U;
+    reply->data[2] = 1U;
+    return true;
+}
+
 bool CoSdo_Receive(CoSdo *sdo, const CoFrame *request, uint32_t now,
                    CoFrame *reply)
 {
@@ -257,7 +390,7 @@ bool CoSdo_Receive(CoSdo *sdo, const CoFrame *request, uint32_t now,
         if ((sdo->state != CO_SDO_IDLE) &&
             (Co_Get16(&request->data[1]) == sdo->index) &&
             (request->data[3] == sdo->subindex)) {
-            if ((sdo->state == CO_SDO_STREAM_DOWNLOAD) &&
+            if (((sdo->state == CO_SDO_STREAM_DOWNLOAD) || sdo->block_stream) &&
                 (sdo->ops.stream_abort != NULL)) {
                 sdo->ops.stream_abort(sdo->ops.user, sdo->index,
                                       sdo->subindex);
@@ -268,6 +401,14 @@ bool CoSdo_Receive(CoSdo *sdo, const CoFrame *request, uint32_t now,
     }
     if (sdo->state != CO_SDO_IDLE) {
         sdo->last_activity = now;
+    }
+    if ((sdo->state == CO_SDO_BLOCK_DOWNLOAD) ||
+        (sdo->state == CO_SDO_BLOCK_END)) {
+        return blockDownload(sdo, request, now, reply);
+    }
+    if ((service == 0xC0U) && (sdo->state == CO_SDO_IDLE)) {
+        startBlockDownload(sdo, request, now, reply);
+        return true;
     }
     if ((command == 0x40U) && (sdo->state == CO_SDO_IDLE)) {
         (void)startUpload(sdo, request, now, reply);

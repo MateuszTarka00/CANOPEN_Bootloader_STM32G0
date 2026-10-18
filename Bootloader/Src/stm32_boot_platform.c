@@ -10,7 +10,7 @@
 #include "fdcan.h"
 #include <string.h>
 
-#define BL_CAN_DEFAULT_NODE_ID 1U
+#define BL_CAN_DEFAULT_NODE_ID DEVICE_BOOT_NODE_ID
 #define BL_CAN_DEFAULT_BITRATE UINT32_C(250000)
 #define BL_CAN_PROTOCOL_VERSION 2U
 #define BL_CAN_SUPPORTED_BITRATE UINT32_C(250000)
@@ -441,7 +441,6 @@ bool BlStm32_ContextInit(BlStm32Context *context)
     context->bitrate = BL_CAN_DEFAULT_BITRATE;
     if (context->storage_valid && supportedHandoff(&context->persistent)) {
         context->handoff_requested = true;
-        context->node_id = (uint8_t)context->persistent.boot_node_id;
         context->bitrate = context->persistent.boot_bitrate;
     }
     return true;

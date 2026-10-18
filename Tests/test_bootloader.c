@@ -654,6 +654,29 @@ static bool discardCanFrame(void *user, const CoFrame *frame)
     return true;
 }
 
+static void sdoBlockImage(CoSdo *sdo, const uint8_t *image, uint32_t size)
+{
+    CoFrame request = {0}, reply;
+    uint32_t offset;
+    request.id = (uint16_t)(0x600U + sdo->node_id); request.length = 8U;
+    request.data[0] = 0xC2U;
+    Co_Put16(&request.data[1], 0x1F50U); request.data[3] = 1U;
+    Co_Put32(&request.data[4], size);
+    assert(CoSdo_Receive(sdo, &request, 20U, &reply));
+    assert(reply.data[0] == 0xA0U && reply.data[4] == 1U);
+    for (offset = 0U; offset < size; offset += 7U) {
+        uint32_t count = size - offset;
+        request.data[0] = (count <= 7U) ? 0x81U : 1U;
+        if (count > 7U) { count = 7U; }
+        memcpy(&request.data[1], &image[offset], count);
+        assert(CoSdo_Receive(sdo, &request, 21U, &reply));
+        assert(reply.data[0] == 0xA2U);
+    }
+    request.data[0] = (uint8_t)(0xC1U | (((7U - size % 7U) % 7U) << 2U));
+    assert(CoSdo_Receive(sdo, &request, 22U, &reply));
+    assert(reply.data[0] == 0xA1U);
+}
+
 static void testObjectDictionaryAndSdo(uint32_t image_size)
 {
     FakeFlash flash;
@@ -739,7 +762,13 @@ static void testObjectDictionaryAndSdo(uint32_t image_size)
     request.data[4] = 1U;
     assert(CoSdo_Receive(&sdo, &request, 1U, &reply));
     assert(reply.data[0] == 0x60U && update.state == FWU_RECEIVING);
-    sdoDownload(&sdo, 0x2002U, image, image_size);
+    assert(BootOd_CheckDownload(&od, 0x1F50U, 0U, image_size, true) == CO_ABORT_READ_ONLY);
+    assert(BootOd_CheckDownload(&od, 0x1F50U, 2U, image_size, true) == CO_ABORT_SUBINDEX);
+    if (image_size <= CO_SDO_BUFFER_SIZE) {
+        sdoDownload(&sdo, 0x2002U, image, image_size);
+    } else {
+        sdoBlockImage(&sdo, image, image_size);
+    }
     assert(update.received == image_size);
     assert(FirmwareUpdate_Finish(&update, 1000U) == FWU_RESULT_NONE);
     {
@@ -762,6 +791,193 @@ static void testObjectDictionaryAndSdo(uint32_t image_size)
     puts("OD identity, heartbeat, segmented upload/download, toggle, timeout and image domain OK");
 }
 
+typedef struct {
+    uint8_t data[DEVICE_IMAGE_MAX];
+    uint32_t written;
+    uint32_t completed;
+    uint32_t aborted;
+    bool fail_write;
+} BlockSink;
+
+static uint32_t blockCheck(void *user, uint16_t index, uint8_t sub,
+                           uint32_t size, bool known)
+{
+    (void)user;
+    return (index == 0x1F50U && sub == 1U && known &&
+            size > 0U && size <= DEVICE_IMAGE_MAX) ? 0U : CO_ABORT_LENGTH;
+}
+
+static uint32_t blockBegin(void *user, uint16_t index, uint8_t sub,
+                           uint32_t size, uint32_t now)
+{
+    (void)now;
+    return blockCheck(user, index, sub, size, true);
+}
+
+static uint32_t blockWrite(void *user, uint16_t index, uint8_t sub,
+                           const uint8_t *data, uint32_t size, uint32_t now)
+{
+    BlockSink *sink = (BlockSink *)user;
+    (void)index; (void)sub; (void)now;
+    if (sink->fail_write) { return CO_ABORT_HARDWARE; }
+    assert(size <= sizeof(sink->data) - sink->written);
+    memcpy(&sink->data[sink->written], data, size);
+    sink->written += size;
+    return 0U;
+}
+
+static uint32_t blockEnd(void *user, uint16_t index, uint8_t sub,
+                         uint32_t size, uint32_t now)
+{
+    BlockSink *sink = (BlockSink *)user;
+    (void)index; (void)sub; (void)now;
+    assert(sink->written == size);
+    sink->completed++;
+    return 0U;
+}
+
+static void blockAbort(void *user, uint16_t index, uint8_t sub)
+{
+    BlockSink *sink = (BlockSink *)user;
+    (void)index; (void)sub;
+    sink->aborted++;
+}
+
+static void initBlockTest(CoSdo *sdo, BlockSink *sink)
+{
+    CoSdoOps ops = {0};
+    memset(sink, 0, sizeof(*sink));
+    ops.user = sink;
+    ops.check_download = blockCheck;
+    ops.write = blockWrite;
+    ops.stream_begin = blockBegin;
+    ops.stream_write = blockWrite;
+    ops.stream_end = blockEnd;
+    ops.stream_abort = blockAbort;
+    CoSdo_Init(sdo, 126U, &ops);
+}
+
+static void blockStart(CoSdo *sdo, uint32_t size, bool crc)
+{
+    CoFrame request = {0}, reply;
+    request.id = 0x67EU; request.length = 8U;
+    request.data[0] = crc ? 0xC6U : 0xC2U;
+    Co_Put16(&request.data[1], 0x1F50U); request.data[3] = 1U;
+    Co_Put32(&request.data[4], size);
+    assert(CoSdo_Receive(sdo, &request, 0U, &reply));
+    assert(reply.id == 0x5FEU && reply.data[0] == (crc ? 0xA4U : 0xA0U));
+    assert(Co_Get16(&reply.data[1]) == 0x1F50U && reply.data[3] == 1U);
+    assert(reply.data[4] == 1U);
+}
+
+static void testBlockDownload(void)
+{
+    CoSdo sdo;
+    BlockSink sink;
+    CoFrame request = {0}, reply;
+    uint32_t size;
+    request.id = 0x67EU; request.length = 8U;
+    for (size = 1U; size <= 257U; ++size) {
+        uint32_t transfer_size = (size == 257U) ? DEVICE_IMAGE_MAX : size;
+        uint32_t offset;
+        initBlockTest(&sdo, &sink);
+        blockStart(&sdo, transfer_size, false);
+        for (offset = 0U; offset < transfer_size; offset += 7U) {
+            uint32_t i, count = transfer_size - offset;
+            bool last = count <= 7U;
+            if (count > 7U) { count = 7U; }
+            request.data[0] = last ? 0x81U : 1U;
+            memset(&request.data[1], 0xEE, 7U);
+            for (i = 0U; i < count; ++i) {
+                request.data[i + 1U] = (uint8_t)(offset + i);
+            }
+            assert(CoSdo_Receive(&sdo, &request, 1U, &reply));
+            assert(reply.data[0] == 0xA2U && reply.data[1] == 1U &&
+                   reply.data[2] == 1U);
+        }
+        assert(sdo.state == CO_SDO_BLOCK_END && sink.completed == 0U);
+        request.data[0] = (uint8_t)(0xC1U | (((7U - transfer_size % 7U) % 7U) << 2U));
+        assert(CoSdo_Receive(&sdo, &request, 2U, &reply));
+        assert(reply.data[0] == 0xA1U && sdo.state == CO_SDO_IDLE);
+        assert(sink.written == transfer_size && sink.aborted == 0U);
+        for (offset = 0U; offset < transfer_size; ++offset) {
+            assert(sink.data[offset] == (uint8_t)offset);
+        }
+        assert(sink.completed == ((transfer_size > CO_SDO_BUFFER_SIZE) ? 1U : 0U));
+    }
+    /* CRC-16/XMODEM known vector, not a copy of the production CRC routine. */
+    for (size = 0U; size < 2U; ++size) {
+        initBlockTest(&sdo, &sink);
+        blockStart(&sdo, 9U, true);
+        request.data[0] = 1U; memcpy(&request.data[1], "1234567", 7U);
+        assert(CoSdo_Receive(&sdo, &request, 1U, &reply));
+        request.data[0] = 0x81U; memcpy(&request.data[1], "89xxxxx", 7U);
+        assert(CoSdo_Receive(&sdo, &request, 2U, &reply));
+        request.data[0] = 0xD5U;
+        Co_Put16(&request.data[1], (uint16_t)(0x31C3U ^ size));
+        assert(CoSdo_Receive(&sdo, &request, 3U, &reply));
+        assert(reply.data[0] == ((size == 0U) ? 0xA1U : 0x80U));
+        assert(sink.written == ((size == 0U) ? 9U : 0U));
+        if (size != 0U) { assert(Co_Get32(&reply.data[4]) == CO_ABORT_CRC); }
+    }
+    for (size = 0U; size < 5U; ++size) {
+        uint32_t offset;
+        initBlockTest(&sdo, &sink);
+        blockStart(&sdo, 256U, true);
+        memset(&request.data[1], 0, 7U);
+        for (offset = 0U; offset < 256U; offset += 7U) {
+            request.data[0] = (offset + 7U >= 256U) ? 0x81U : 1U;
+            assert(CoSdo_Receive(&sdo, &request, 1U, &reply));
+            assert(reply.data[0] == 0xA2U);
+        }
+        assert(sink.written == 256U && sink.completed == 0U);
+        request.data[0] = (size == 2U) ? 0xC1U : 0xCDU;
+        Co_Put16(&request.data[1], (size == 1U) ? 1U : 0U);
+        if (size == 3U) {
+            assert(CoSdo_Poll(&sdo, 1001U, &reply));
+            assert(Co_Get32(&reply.data[4]) == CO_ABORT_TIMEOUT);
+        } else if (size == 4U) {
+            request.data[0] = 0x80U;
+            Co_Put16(&request.data[1], 0x1F50U); request.data[3] = 1U;
+            assert(!CoSdo_Receive(&sdo, &request, 2U, &reply));
+        } else {
+            assert(CoSdo_Receive(&sdo, &request, 2U, &reply));
+            assert(reply.data[0] == ((size == 0U) ? 0xA1U : 0x80U));
+            if (size == 1U) { assert(Co_Get32(&reply.data[4]) == CO_ABORT_CRC); }
+            if (size == 2U) { assert(Co_Get32(&reply.data[4]) == CO_ABORT_LENGTH); }
+        }
+        assert(sdo.state == CO_SDO_IDLE);
+        assert(sink.completed == ((size == 0U) ? 1U : 0U));
+        assert(sink.aborted == ((size == 0U) ? 0U : 1U));
+    }
+    for (size = 0U; size < 5U; ++size) {
+        initBlockTest(&sdo, &sink);
+        blockStart(&sdo, 256U, true);
+        if (size == 0U) {
+            request.data[0] = 2U;
+            assert(CoSdo_Receive(&sdo, &request, 1U, &reply));
+            assert(Co_Get32(&reply.data[4]) == CO_ABORT_SEQUENCE);
+        } else if (size == 1U) {
+            assert(CoSdo_Poll(&sdo, 1000U, &reply));
+            assert(Co_Get32(&reply.data[4]) == CO_ABORT_TIMEOUT);
+        } else if (size == 2U) {
+            request.data[0] = 0x80U;
+            Co_Put16(&request.data[1], 0x1F50U); request.data[3] = 1U;
+            assert(!CoSdo_Receive(&sdo, &request, 1U, &reply));
+        } else if (size == 3U) {
+            request.data[0] = 0x81U;
+            assert(CoSdo_Receive(&sdo, &request, 1U, &reply));
+            assert(Co_Get32(&reply.data[4]) == CO_ABORT_LENGTH);
+        } else {
+            sink.fail_write = true; request.data[0] = 1U;
+            assert(CoSdo_Receive(&sdo, &request, 1U, &reply));
+            assert(Co_Get32(&reply.data[4]) == CO_ABORT_HARDWARE);
+        }
+        assert(sink.aborted == 1U && sink.completed == 0U && sdo.state == CO_SDO_IDLE);
+    }
+    puts("SDO block download: sizes 1..256 and 104 KiB, XMODEM CRC, Node 126, sequence/timeout/abort/write errors OK");
+}
+
 int main(void)
 {
     testSha256();
@@ -775,6 +991,7 @@ int main(void)
     testRejectedAndInterruptedUpdates();
     testObjectDictionaryAndSdo(64U);
     testObjectDictionaryAndSdo(256U);
+    testBlockDownload();
     puts("All portable bootloader tests passed.");
     return 0;
 }

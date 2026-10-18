@@ -162,6 +162,10 @@ uint32_t BootOd_Read(void *user, uint16_t index, uint8_t subindex,
             return CO_ABORT_SUBINDEX;
         }
         break;
+    case 0x1F50U:
+        if (subindex == 1U) { return CO_ABORT_WRITE_ONLY; }
+        if (subindex != 0U) { return CO_ABORT_SUBINDEX; }
+        return writeNumber(data, size, 1U, 1U);
     case 0x2001U:
         value = publicUpdateState(od);
         width = 1U;
@@ -237,6 +241,11 @@ uint32_t BootOd_CheckDownload(void *user, uint16_t index, uint8_t subindex,
     if ((od == NULL) || !size_known) {
         return CO_ABORT_LENGTH;
     }
+    if (index == 0x1F50U) {
+        return (subindex == 1U) ?
+            BootOd_CheckDownload(user, 0x2002U, 0U, size, size_known) :
+            ((subindex == 0U) ? CO_ABORT_READ_ONLY : CO_ABORT_SUBINDEX);
+    }
     if (subindex != 0U) {
         return CO_ABORT_SUBINDEX;
     }
@@ -288,6 +297,10 @@ uint32_t BootOd_Write(void *user, uint16_t index, uint8_t subindex,
     uint32_t abort_code;
     if ((od == NULL) || (data == NULL)) {
         return CO_ABORT_HARDWARE;
+    }
+    if (index == 0x1F50U) {
+        return (subindex == 1U) ?
+            BootOd_Write(user, 0x2002U, 0U, data, size, now) : CO_ABORT_SUBINDEX;
     }
     abort_code = BootOd_CheckDownload(od, index, subindex, size, true);
     if (abort_code != 0U) {
@@ -400,6 +413,10 @@ uint32_t BootOd_StreamWrite(void *user, uint16_t index, uint8_t subindex,
                             const uint8_t *data, uint32_t size, uint32_t now)
 {
     BootOd *od = (BootOd *)user;
+    if ((index == 0x1F50U) && (subindex == 1U)) {
+        index = 0x2002U;
+        subindex = 0U;
+    }
     if ((index != 0x2002U) || (subindex != 0U) || (od == NULL)) {
         return CO_ABORT_ACCESS;
     }
@@ -422,6 +439,10 @@ uint32_t BootOd_StreamEnd(void *user, uint16_t index, uint8_t subindex,
 {
     BootOd *od = (BootOd *)user;
     (void)now;
+    if ((index == 0x1F50U) && (subindex == 1U)) {
+        index = 0x2002U;
+        subindex = 0U;
+    }
     if ((od == NULL) || (index != 0x2002U) || (subindex != 0U) ||
         (od->update->received != size)) {
         return CO_ABORT_LENGTH;
@@ -432,6 +453,10 @@ uint32_t BootOd_StreamEnd(void *user, uint16_t index, uint8_t subindex,
 void BootOd_StreamAbort(void *user, uint16_t index, uint8_t subindex)
 {
     BootOd *od = (BootOd *)user;
+    if ((index == 0x1F50U) && (subindex == 1U)) {
+        index = 0x2002U;
+        subindex = 0U;
+    }
     if ((od != NULL) && (index == 0x2002U) && (subindex == 0U) &&
         (od->update->state == FWU_RECEIVING)) {
         (void)FirmwareUpdate_Cancel(od->update);

@@ -49,8 +49,14 @@ class UpdateServer(can.Listener):
         self.downloads: dict[int, bytes] = {}
         self.commands: list[int] = []
         self.errors: list[str] = []
+        self.nodes: list[int] = []
 
     def on_message_received(self, message: can.Message) -> None:
+        node = message.arbitration_id - 0x600
+        self.nodes.append(node)
+        if node != (1 if self.mode == 0 else 126):
+            self.errors.append("Request sent to the wrong execution-mode Node-ID")
+            return
         data = bytes(message.data)
         index = int.from_bytes(data[1:3], "little")
         address = data[1:4]
@@ -88,7 +94,7 @@ class UpdateServer(can.Listener):
                 if len(self.buffer) != self.size:
                     self.errors.append("Incorrect download size")
                 self.downloads[self.index] = bytes(self.buffer)
-        self.bus.send(can.Message(arbitration_id=0x581, data=reply,
+        self.bus.send(can.Message(arbitration_id=0x580 + node, data=reply,
                                   is_extended_id=False))
 
 
@@ -191,6 +197,8 @@ class CommissioningTests(unittest.TestCase):
                 self.assertEqual(server.downloads[0x2008], self.manifest)
                 self.assertEqual(server.downloads[0x2002], self.image)
                 self.assertEqual(server.mode, 0)
+                self.assertIn(126, server.nodes)
+                self.assertEqual(server.nodes[-1], 1)
             finally:
                 notifier.stop()
                 client_bus.shutdown()
@@ -208,6 +216,37 @@ class CommissioningTests(unittest.TestCase):
                     client.read(0x2000)
             with self.assertRaises(ValueError):
                 client.write(0x2002, b"")
+
+    def test_bootloader_only_probe_switches_address_and_returns_to_application(self) -> None:
+        args = ["update_firmware", "--package", str(self.package), "--interface",
+                "virtual", "--channel", "unused", "--confirm-update"]
+        with patch("sys.argv", args), patch.object(
+                update_firmware, "read_firmware_public_key", return_value=self.public
+                ), patch.object(update_firmware.can, "Bus"), patch.object(
+                    update_firmware, "SdoClient") as client:
+            peer = client.return_value
+            peer.read.side_effect = [TimeoutError("Application absent"),
+                                     1, 1, 1, 0x1A000, 0, 0x100]
+            destinations: list[int] = []
+            peer.write.side_effect = lambda *_: destinations.append(peer.node)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(update_firmware.main(), 0)
+            self.assertEqual(destinations, [126] * 5)
+            self.assertEqual(peer.node, 1)
+            self.assertEqual(peer.wait_mode.call_args_list[0].args, (0, 120))
+
+    def test_identity_abort_does_not_trigger_boot_address_fallback(self) -> None:
+        args = ["update_firmware", "--package", str(self.package), "--interface",
+                "virtual", "--channel", "unused", "--confirm-update"]
+        with patch("sys.argv", args), patch.object(
+                update_firmware, "read_firmware_public_key", return_value=self.public
+                ), patch.object(update_firmware.can, "Bus"), patch.object(
+                    update_firmware, "SdoClient") as client:
+            client.return_value.read.side_effect = update_firmware.SdoError("SDO abort")
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(update_firmware.main(), 2)
+            self.assertEqual(client.return_value.read.call_count, 1)
+            client.return_value.write.assert_not_called()
 
     def test_update_rejects_legacy_bootloader_before_downloading(self) -> None:
         args = ["update_firmware", "--package", str(self.package), "--interface",

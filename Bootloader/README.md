@@ -27,17 +27,49 @@ Object Dictionary -- firmware update receiver
 ```
 
 The bootloader runs a cooperative 1 ms poll loop; no FreeRTOS, heap allocation,
-or application control-layer dependency is used. CANopen uses node ID 1 and
+or application control-layer dependency is used. CANopen uses node ID 126 and
 250 kbit/s in the current board adapter. The app enters bootloader mode through
 the existing application handoff journal (protocol 2); update transport is a
 separate versioned vendor profile and has not been verified against
 LiftAppTool.
 
 The local CANopen services are CiA 301 NMT slave, boot-up, heartbeat producer,
-SDO server (expedited and segmented), EMCY, Error Register, Predefined Error
+SDO server (expedited, segmented and size-indicated block download), EMCY, Error Register, Predefined Error
 Field, and the standard SDO server parameter. No CiA 417 OD object numbers are
 invented or claimed compliant: the applicable licensed profile edition and
 normative tables have not been supplied.
+
+### LiftAppTool compatibility: transport stage only
+
+The supplied manual (pages 16 and 28) and the recorded CAN trace establish
+bootloader Node-ID 126. The manual screenshot shows block download to
+`0x1F50:01`. This target now uses Node 126 even when an older handoff journal
+contains the application's Node-ID. SDO request/reply IDs are `0x67E`/`0x5FE`;
+heartbeat is `0x77E`. Keep this address free of other devices during service.
+
+`0x1F50:00` reads as U8 count 1; `0x1F50:01` is a write-only alias for the
+existing image domain. It requires a valid manifest uploaded to `0x2008:00`
+and successful vendor begin (`0x2000:00=1`) first. Completion acknowledges
+transport only: vendor verify (`2`) and activate (`3`) remain mandatory.
+No control values for `0x1F51`, unlock password, device-type constant or
+unknown binary-file header are invented. Full wizard interoperability is
+NOT implemented or claimed. ZIP files must not be sent as firmware data.
+
+Block download requires a declared nonzero size and negotiates one segment
+per sub-block (a permitted block size), so Flash writes finish before the next
+sub-block is acknowledged without requiring a large RX queue or RAM buffer.
+CRC-16/XMODEM is supported when requested. Invalid sequence numbers abort
+the session; no uncertain Flash write is automatically replayed. Size, final
+padding, CRC, client abort, stream errors and timeout are checked. A failed
+stream invokes the existing cancellation path and cannot activate an image.
+Block upload and size-unspecified block download are not supported. The
+small block size trades throughput for bounded memory and RX servicing.
+
+Next bench step: reflash only the new bootloader at `0x08000000`, preserving
+factory identity and journal. Reset and capture the wizard traffic: it should
+now receive its Node-126 `0x1000` reply (currently device type 0). Capture
+subsequent requests or rejection; do not guess a device type to bypass checks.
+The file parser, unlock/control sequence and activation still require evidence.
 
 ## Flash map
 
@@ -167,9 +199,9 @@ These tests do not replace target link-size,
 FDCAN, flash-bank, power-cut, signature interoperability, LiftAppTool, or
 CiA conformance testing.
 
-The enabled Debug/Release verifier and LTO image contain 33,592 bytes of text,
-84 bytes of initialized data and 5,708 bytes of BSS. The load image leaves
-3,184 bytes before the fixed discovery record at `0x08008FE0`. The record contains
+The enabled Debug/Release verifier and LTO image contain 34,400 bytes of text,
+84 bytes of initialized data and 5,716 bytes of BSS. The load image leaves
+2,376 bytes before the fixed discovery record at `0x08008FE0`. The record contains
 the protocol, layout and signing gate and is checked by the application.
 The linker asserts that the load image cannot overlap this record or either
 application slot. The exported bootloader BIN spans exactly 36 KiB including

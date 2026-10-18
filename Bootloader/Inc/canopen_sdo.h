@@ -1,6 +1,6 @@
 /**
  * @file canopen_sdo.h
- * @brief Bounded CiA 301 expedited/segmented SDO server.
+ * @brief Bounded CiA 301 expedited, segmented and block-download SDO server.
  */
 #ifndef CANOPEN_SDO_H
 #define CANOPEN_SDO_H
@@ -13,7 +13,9 @@ typedef enum {
     CO_SDO_IDLE = 0U,
     CO_SDO_UPLOAD,
     CO_SDO_DOWNLOAD,
-    CO_SDO_STREAM_DOWNLOAD
+    CO_SDO_STREAM_DOWNLOAD,
+    CO_SDO_BLOCK_DOWNLOAD,
+    CO_SDO_BLOCK_END
 } CoSdoState;
 
 typedef struct {
@@ -44,6 +46,10 @@ typedef struct {
     uint32_t offset;
     uint32_t last_activity;
     uint32_t timeout_ms;
+    uint16_t block_crc;
+    uint8_t block_tail_size;
+    bool block_crc_enabled;
+    bool block_stream;
     uint8_t buffer[CO_SDO_BUFFER_SIZE];
 } CoSdo;
 

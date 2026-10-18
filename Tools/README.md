@@ -144,16 +144,21 @@ LiftAppTool compatibility. Example for a PCAN adapter:
 ```powershell
 & ".\.venv\Scripts\python.exe" ".\Tools\update_firmware.py" `
   --package ".\out\vega-1.package.zip" `
-  --interface pcan --channel PCAN_USBBUS1 --node 1 --confirm-update
+  --interface pcan --channel PCAN_USBBUS1 --node 1 --boot-node 126 --confirm-update
 ```
 
 Install the adapter vendor's driver and choose a backend/channel supported by
-python-can. The current target uses Classic CAN, 250 kbit/s, Node ID 1.
+python-can. The current target uses Classic CAN, 250 kbit/s, application Node ID 1
+and bootloader Node ID 126. The client first reads the application address; on a
+read timeout it probes the bootloader address without retrying a write. With
+only the bootloader installed, this initial probe can take 15 seconds.
 The tool verifies the package before opening CAN, discovers execution mode and
 capability, requests application handoff only when necessary, sends manifest,
 begin, segmented image, finish and activate, then checks the responding
 application's numeric version. It never automatically retries an uncertain write,
 cancels an interrupted update or changes a non-idle receiver state.
+After handoff it changes the SDO destination to `--boot-node`; after activation
+it waits for the application at `--node`.
 
 Per the current prototype requirement, `0x2000=1` explicitly authorizes the
 outage. Application tasks quiesce cooperatively, the actual final SDO TX buffer
