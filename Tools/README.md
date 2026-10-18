@@ -158,7 +158,70 @@ version: verify the journal/self-test and reset/rollback on hardware.
 A new handoff is refused while the running application is still an unconfirmed
 trial; allow its startup self-test to complete before requesting another update.
 
-## Automated validation
+## Moving the signing key to another Windows computer
+
+Copying a CurrentUser DPAPI file to a different computer/account is not a
+portable key backup. Use `migrate_signing_key.py` to move the SAME private key.
+Do not generate another key unless you intend to replace the bootloader's
+compiled public key and reprogram all affected devices.
+
+On the original computer, log in as the Windows user that created the key:
+
+```powershell
+& ".\.venv\Scripts\python.exe" ".\Tools\migrate_signing_key.py" export `
+  --output "$env:USERPROFILE\Desktop\canopen-signing-key.encrypted.pem"
+```
+
+Enter a strong unique password of at least 16 characters twice. Password input
+is hidden, not a command-line argument. If hidden input is unavailable the tool
+fails rather than echoing the password. The export verifies the existing private
+key against `firmware_auth_key.h` and writes only encrypted PKCS8 PEM.
+Existing output files are never overwritten.
+
+Move that encrypted PEM through a trusted channel/removable drive; transfer
+the password separately. Never attach private-key files to chats or commit
+them. Both computers require the same trusted project/public-key header.
+The header match is a configuration check, not remote attestation of a device.
+
+On the second computer, install Python 3.10+ with the Python launcher, copy the
+project (NOT the first computer's `.venv`), and create its environment:
+
+```powershell
+Set-Location "C:\Projects\CANOPEN_Bootloader_STM32G0"
+py -3 -m venv .venv
+& ".\.venv\Scripts\python.exe" -m pip install -r ".\requirements.txt"
+
+& ".\.venv\Scripts\python.exe" ".\Tools\migrate_signing_key.py" import `
+  --source "E:\canopen-signing-key.encrypted.pem"
+
+& ".\.venv\Scripts\python.exe" ".\Tools\migrate_signing_key.py" verify
+```
+
+Replace `E:\...` with the transferred PEM path. Import prompts for its password,
+checks the public key, protects the private key using the destination account's
+DPAPI, and checks a local decrypt round-trip before writing. Output defaults to
+`%LOCALAPPDATA%\CANOPEN_Bootloader\PrototypeSigningKey\ed25519-signing-key.dpapi`.
+The original computer's key is not changed or deleted.
+If a destination key already exists, import fails; do not delete it without
+first determining whether it is the correct key or has a required backup.
+
+`verify` checks local decryption, public-key equality and a sign/verify operation.
+Compare the printed PUBLIC-key SHA-256 fingerprints on both computers; neither
+command prints private-key material. Once imported, `package_firmware.py` uses
+the destination DPAPI key automatically and the installed bootloader is unchanged.
+
+Keep a controlled offline copy of the encrypted PEM and its separately protected
+password if disaster recovery is required; remove unnecessary transfer copies
+according to your storage policy. Ordinary deletion is not guaranteed secure
+erasure on SSDs/backups. Losing all usable DPAPI accounts and encrypted backups
+means losing signing capability. Anyone with this key can sign firmware, so
+limit access to both accounts and backups.
+
+The tool never writes plaintext private-key files. Python/cryptography do not
+guarantee erasure of all in-memory copies, nor protection against a compromised
+host, memory dumps or OS paging.
+
+## Running automated validation
 
 ```powershell
 & ".\.venv\Scripts\python.exe" -m pip install -r ".\requirements-dev.txt"
