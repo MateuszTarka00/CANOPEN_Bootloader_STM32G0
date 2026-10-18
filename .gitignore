@@ -15,3 +15,6 @@
 # OS junk
 .DS_Store
 Thumbs.db
+.venv/
+__pycache__/
+/out/
