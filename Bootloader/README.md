@@ -146,7 +146,7 @@ Bench procedure:
    `Release\CANOPEN_Bootloader_STM32G0.bin` (36,864 bytes) at `0x08000000`
    using SWD, **without mass erase**; preserve application, factory and NVM.
 2. Power-cycle after programming, then enter service mode as before.
-   Read Node 126 `0x100A:00` = `1.0.3`, `0x200D:00` = `0x00010003`,
+   Read Node 126 `0x100A:00` = `1.0.4`, `0x200D:00` = `0x00010004`,
    and `0x2010:00` = 14 to verify this image.
 3. Retry the **same signed 28,708-byte file**, capturing full CAN traffic.
    If it aborts, do not reset/retry yet: read every `0x2010:01..0E` and
@@ -164,6 +164,30 @@ Bench procedure:
 No new `0x1F51`, password or activation metadata is defined. Wizard activation
 and full interoperability still require evidence. These diagnostics identify
 the actual failing path; they are not a claim that the physical fault is fixed.
+
+### 1.0.4 post-Flash timeout clock correction
+
+The 1.0.3 hardware trace passed journal save and slot preparation, then accepted
+two image bytes (stage 8, no Flash failure snapshot) before reporting firmware
+result 7 (TIMEOUT). The header-completion segment took about 2455 ms.
+The main loop reused its pre-receive timestamp for Co_Poll, while the receive
+callback refreshed last_activity after synchronous preparation. Unsigned
+subtraction therefore interpreted the older poll timestamp as a huge elapsed
+interval, immediately failing the update; the next segment received a generic
+hardware abort because the update was no longer receiving.
+
+The main loop now samples HAL_GetTick again before polling. Co_Poll also uses
+the existing SDO time callback when available, both before firmware timeout
+checking and after possible journal recovery, before SDO/heartbeat polling.
+Platforms without a time callback retain caller-supplied timestamps. Timeout
+thresholds remain 1000 ms for SDO and 15000 ms for firmware inactivity; no
+timeout disabling, signed timestamp casts or Flash flag clearing is used.
+
+A native regression reproduces receive -> 2455 ms erase -> polling with the
+old timestamp. It covers segmented and CRC block containers, normal/wrapped
+tick counters, complete transfers, SDO boundaries at 999/1000 ms and firmware
+boundaries at 14999/15000 ms. It failed on 1.0.3 before the correction.
+Hardware verification of the next transfer is still required.
 
 ### 1.0.3 polling-only peripheral configuration
 
@@ -378,9 +402,9 @@ These tests do not replace target link-size,
 FDCAN, flash-bank, power-cut, signature interoperability, LiftAppTool, or
 CiA conformance testing.
 
-The 1.0.3 Debug/Release verifier and LTO image contain 35,552 bytes of
+The 1.0.4 Debug/Release verifier and LTO image contain 35,632 bytes of
 text, 84 bytes of initialized data and 5,700 bytes of BSS. The load image ends
-at `0x08008B18`, leaving 1,224 bytes before the fixed discovery record at
+at `0x08008B68`, leaving 1,144 bytes before the fixed discovery record at
 `0x08008FE0`. The record contains
 the protocol, layout and signing gate and is checked by the application.
 The linker asserts that the load image cannot overlap this record or either
@@ -388,7 +412,7 @@ application slot. The exported bootloader BIN spans exactly 36 KiB including
 the record and address gap, not 36 KiB of executable code.
 Both projects automatically generate the raw BIN in their selected Debug/Release
 output directory after a successful CubeIDE build.
-Both 1.0.3 BIN outputs are byte-identical. ELF inspection confirms that TIM14
+Both 1.0.4 BIN outputs are byte-identical. The 1.0.3 ELF inspection confirmed that TIM14
 and both shared TIM16/TIM17/FDCAN vectors resolve to Default_Handler, TIM1
 retains its tick handler, and HAL_FDCAN_IRQHandler/FDCAN2/TIM17 handles are not
 linked into the bootloader.

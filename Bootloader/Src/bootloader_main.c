@@ -186,7 +186,7 @@ void Bootloader_Main(void)
         if (BlStm32_FdcanReceive(&received)) {
             (void)Co_Receive(&runtime.canopen, &received, now);
         }
-        Co_Poll(&runtime.canopen, now);
+        Co_Poll(&runtime.canopen, HAL_GetTick());
         if (runtime.canopen.nmt.reset_requested) {
             BlStm32_SystemReset();
         }

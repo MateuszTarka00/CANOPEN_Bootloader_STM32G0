@@ -5,6 +5,12 @@
 #include "canopen.h"
 #include <string.h>
 
+static uint32_t pollTime(const Canopen *co, uint32_t fallback)
+{
+    return (co->sdo.ops.get_time_ms != NULL) ?
+        co->sdo.ops.get_time_ms(co->sdo.ops.user) : fallback;
+}
+
 static void queueFrame(Canopen *co, const CoFrame *frame)
 {
     if (!co->tx_pending) {
@@ -96,7 +102,11 @@ void Co_Poll(Canopen *co, uint32_t now)
     if (co == NULL) {
         return;
     }
+    /* Receive callbacks may have advanced the clock during synchronous Flash IO. */
+    now = pollTime(co, now);
     pollUpdateTimeout(co, now);
+    /* Timeout recovery can itself persist a journal record. */
+    now = pollTime(co, now);
     if (co->nmt.reset_communication_requested) {
         CoSdo_Reset(&co->sdo);
         co->nmt.reset_communication_requested = false;

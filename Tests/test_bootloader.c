@@ -1105,6 +1105,124 @@ static uint32_t readDiagnostic(CoSdo *sdo, uint8_t subindex)
     return (subindex == 0U) ? reply.data[4] : Co_Get32(&reply.data[4]);
 }
 
+static void testReceivePollAfterErase(void)
+{
+    uint32_t mode, wrap, outcome;
+    for (mode = 0U; mode < 2U; ++mode) {
+        for (wrap = 0U; wrap < 2U; ++wrap) {
+            for (outcome = 0U; outcome < 3U; ++outcome) {
+                FakeFlash flash;
+                FakeNvm nvm;
+                PsStore store;
+                PsData persistent;
+                BootloaderInterface bootloader;
+                FirmwareUpdate update;
+                FiData factory;
+                BootOd od;
+                CoSdo sdo;
+                Canopen node;
+                BlTransaction transaction;
+                CoFrame request = {0};
+                uint8_t image[256] = {0};
+                uint8_t record[BL_MANIFEST_RECORD_SIZE];
+                uint8_t container[BL_MANIFEST_RECORD_SIZE + sizeof(image)];
+                BlImageManifest manifest;
+                uint16_t crc = 0U;
+                uint32_t offset;
+                uint32_t activity;
+                uint8_t toggle = 0U;
+                initContainerFixture(&flash, &nvm, &store, &persistent,
+                                     &bootloader, &update, &factory, &od, &sdo);
+                assert(FirmwareUpdate_Init(&update, &bootloader, 15000U));
+                flash.now_ms = wrap ? UINT32_MAX - 200U : 100U;
+                flash.erase_advance_ms = 2455U;
+                BlTransaction_Init(&transaction, &bootloader, &store, &persistent);
+                assert(Co_Init(&node, 126U, 0U, discardCanFrame, NULL,
+                               &bootloader, &update, &transaction, &store,
+                               &persistent, &factory, true, flash.now_ms));
+                Co_Poll(&node, flash.now_ms); /* Send boot-up before SDO. */
+                makeContainer(image, sizeof(image), &manifest, record, container);
+                request.id = 0x67EU;
+                request.length = 8U;
+                request.data[0] = mode ? 0xC6U : 0x21U;
+                Co_Put16(&request.data[1], 0x1F50U);
+                request.data[3] = 1U;
+                Co_Put32(&request.data[4], sizeof(container));
+                assert(Co_Receive(&node, &request, flash.now_ms));
+                Co_Poll(&node, flash.now_ms);
+                for (offset = 0U; offset < sizeof(container); offset += 7U) {
+                    uint32_t before;
+                    uint32_t count = sizeof(container) - offset;
+                    bool last;
+                    if (count > 7U) { count = 7U; }
+                    last = offset + count == sizeof(container);
+                    flash.now_ms++;
+                    before = flash.now_ms;
+                    memset(request.data, 0, sizeof(request.data));
+                    request.data[0] = mode ? (last ? 0x81U : 1U) :
+                        (uint8_t)(toggle | ((7U - count) << 1U) | (last ? 1U : 0U));
+                    memcpy(&request.data[1], &container[offset], count);
+                    crc = testBlockCrc(crc, &container[offset], count);
+                    assert(Co_Receive(&node, &request, before));
+                    assert(node.pending_tx.data[0] != 0x80U);
+                    /* Reproduce the old main loop's pre-erase timestamp. */
+                    Co_Poll(&node, before);
+                    assert(update.result == FWU_RESULT_NONE);
+                    assert(node.sdo.state != CO_SDO_IDLE ||
+                           (!mode && last));
+                    if (offset == 147U) {
+                        assert(update.received == 2U && flash.program_count == 0U);
+                        assert(update.state == FWU_RECEIVING);
+                        activity = flash.now_ms;
+                        assert(update.last_activity == activity);
+                        assert(node.sdo.last_activity == activity);
+                        if (outcome == 1U) {
+                            flash.now_ms = activity + 999U;
+                            Co_Poll(&node, before);
+                            assert(node.sdo.state != CO_SDO_IDLE);
+                            flash.now_ms++;
+                            Co_Poll(&node, before);
+                            assert(node.sdo.state == CO_SDO_IDLE);
+                            assert(Co_Get32(&node.pending_tx.data[4]) == CO_ABORT_TIMEOUT);
+                            assert(update.result == FWU_RESULT_CANCELLED);
+                            break;
+                        }
+                        if (outcome == 2U) {
+                            CoSdo_Reset(&node.sdo);
+                            flash.now_ms = activity + 14999U;
+                            Co_Poll(&node, before);
+                            assert(update.state == FWU_RECEIVING);
+                            flash.now_ms++;
+                            Co_Poll(&node, before);
+                            assert(update.state == FWU_FAILED);
+                            assert(update.result == FWU_RESULT_TIMEOUT);
+                            assert(persistent.update_result == FWU_RESULT_TIMEOUT);
+                            break;
+                        }
+                    }
+                    toggle ^= 0x10U;
+                }
+                if (outcome == 0U) {
+                    if (mode != 0U) {
+                        request.data[0] = (uint8_t)(0xC1U |
+                            (((7U - sizeof(container) % 7U) % 7U) << 2U));
+                        Co_Put16(&request.data[1], crc);
+                        flash.now_ms++;
+                        assert(Co_Receive(&node, &request, flash.now_ms));
+                        assert(node.pending_tx.data[0] == 0xA1U);
+                        Co_Poll(&node, flash.now_ms);
+                    }
+                    assert(update.state == FWU_PENDING);
+                    assert(update.received == sizeof(image));
+                    assert(flash.program_count != 0U && flash.pending_count == 1U);
+                    assert(flash.activate_count == 0U);
+                }
+            }
+        }
+    }
+    puts("Receive -> 2455 ms erase -> stale poll: segmented/block, wrap, full transfer and real timeout boundaries OK");
+}
+
 static void testContainerFailureDiagnostics(void)
 {
     FakeFlash flash;
@@ -1180,9 +1298,9 @@ static void testContainerFailureDiagnostics(void)
         uint8_t value[16];
         uint32_t size;
         assert(BootOd_Read(&od, 0x100AU, 0U, value, &size) == 0U);
-        assert(size == 5U && memcmp(value, "1.0.3", 5U) == 0);
+        assert(size == 5U && memcmp(value, "1.0.4", 5U) == 0);
         assert(BootOd_Read(&od, 0x200DU, 0U, value, &size) == 0U);
-        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010003));
+        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010004));
     }
     flash.diagnostics.value[BL_DIAG_STAGE] = 3U;
     flash.diagnostics.value[BL_DIAG_OPERATION] = 0x00030003U;
@@ -1410,6 +1528,7 @@ int main(void)
     testObjectDictionaryAndSdo(64U);
     testObjectDictionaryAndSdo(256U);
     testSignedContainerDownloads();
+    testReceivePollAfterErase();
     testContainerFailureDiagnostics();
     testBlockDownload();
     puts("All portable bootloader tests passed.");
