@@ -60,6 +60,13 @@ def main() -> None:
         shutil.rmtree(output)
     output.mkdir()
     try:
+        target = (ROOT / "Bootloader" / "Src" / "stm32_boot_platform.c").read_text()
+        (output / "vector_body.inc").write_text(function_body(target, "static bool vectorValid"))
+        executable = output / "test_image_vectors.exe"
+        subprocess.run(flags + ["-I" + str(output),
+                               str(ROOT / "Tests" / "test_image_vectors.c"),
+                               "-o", str(executable)], check=True)
+        subprocess.run([str(executable)], check=True)
         peripheral_functions = (
             ("Core/Src/fdcan.c", "void HAL_FDCAN_MspInit"),
             ("Bootloader/Src/stm32_boot_platform.c", "bool BlStm32_FdcanInit"),

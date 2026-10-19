@@ -54,16 +54,20 @@ The receiver buffers and validates the complete manifest (record CRC/commit,
 Ed25519 signature, hardware compatibility, and exact declared image length)
 before erasing the inactive slot. It then streams the image, checks transfer
 CRC, read-back digest and image validity, and leaves the persistent update
-state VERIFIED. It does not schedule activation; normal trial/rollback rules
-still require a separate activation policy. Small containers use the streaming
+state VERIFIED. Transfer completion alone does not schedule activation:
+the observed LiftAppTool `0x1F51:01=1` command or vendor `0x2000:00=3`
+schedules the restartable A/B swap. Normal trial/rollback rules remain in use.
+Small containers use the streaming
 path too. Both segmented and block SDO downloads are supported, including a
 manifest that crosses segment boundaries.
 
 The vendor path remains available: upload `manifest.bin` to `0x2008:00`, write
 `0x2000:00=1`, download only the raw image to `0x2002:00`, then explicitly
-finish (`2`) and schedule activation (`3`). This path is unchanged. No control
-values for `0x1F51`, unlock password, device-type constant or undocumented
-LiftAppTool envelope are invented. This protocol work is not a claim of full
+finish (`2`) and schedule activation (`3`). Both activation commands share
+the same verified-image gate. Only the observed one-byte start value 1 is
+accepted at `0x1F51:01`; other control values are rejected. No unlock password,
+device-type constant or undocumented LiftAppTool envelope is invented.
+This protocol work is not a claim of full
 LiftAppTool wizard interoperability. ZIP files must never be sent as firmware
 data; use the generated `.update.bin` only for its documented 1F50 container
 transfer, or use the existing ZIP-aware PC client for the vendor path.
@@ -146,7 +150,7 @@ Bench procedure:
    `Release\CANOPEN_Bootloader_STM32G0.bin` (36,864 bytes) at `0x08000000`
    using SWD, **without mass erase**; preserve application, factory and NVM.
 2. Power-cycle after programming, then enter service mode as before.
-   Read Node 126 `0x100A:00` = `1.0.4`, `0x200D:00` = `0x00010004`,
+   Read Node 126 `0x100A:00` = `1.0.5`, `0x200D:00` = `0x00010005`,
    and `0x2010:00` = 14 to verify this image.
 3. Retry the **same signed 28,708-byte file**, capturing full CAN traffic.
    If it aborts, do not reset/retry yet: read every `0x2010:01..0E` and
@@ -161,9 +165,49 @@ Bench procedure:
    the captured HAL bank count, which also depends on the device sales type.
    Do not automatically clear error flags/change option bytes to hide a failure.
 
-No new `0x1F51`, password or activation metadata is defined. Wizard activation
-and full interoperability still require evidence. These diagnostics identify
+The observed `0x1F51:01=1` start command is supported from 1.0.5; no password
+or new activation metadata is defined. End-to-end wizard activation
+and full interoperability still require hardware verification. These diagnostics identify
 the actual failing path; they are not a claim that the physical fault is fixed.
+
+### 1.0.5 stored-image vectors and observed start command
+
+The supplied transfer ending rejected final download verification, persisted
+IMAGE_REJECTED (10), then showed a one-byte `0x1F51:01=1` request followed by
+NMT Reset Node. The reset cleared volatile `0x2010` diagnostics; zeros after
+reset do not establish that final verification succeeded.
+
+Vector validation now reads MSP/Reset_Handler from the selected storage slot
+but checks the executable address against Slot A (`0x08009000`) and the signed
+image size. Slot B (`0x08023800`) is storage, not a second link address. Stack
+RAM bounds/alignment, Thumb bit, image-size and entry-point bounds remain
+enforced, as do Ed25519, compatibility, CRC and SHA-256 checks.
+
+`0x1F51:00` is a read-only U8 count of 1; `0x1F51:01` accepts only the observed
+U8 value 1 (start). Reading subindex 1 is rejected as write-only. Other values,
+lengths and subindices are rejected. This implements the observed command,
+not the complete CiA 302 program-control state machine. It shares activation
+logic with vendor command 3: valid factory/update capability, no active
+container or failed/receiving transfer, persistent VERIFIED with no error,
+pending Slot B in both runtime and journal, and no latched Flash fault.
+Scheduling writes the existing durable swap state before the SDO success
+response; journal failure returns a hardware abort. The cooperative transaction
+then swaps A/B, tolerates a subsequent NMT reset, and enters the existing trial
+boot/confirmation/rollback flow. No direct jump to Slot B or automatic
+activation on transfer completion is introduced.
+
+Native tests compile the production target vector validator and check valid
+A-linked vectors in either storage buffer, invalid B-linked entries, erased
+vectors, RAM/Thumb/entry/size boundaries. SDO tests check the exact start
+request, OD access/length/value rejection, unverified/failed/faulted transfers,
+journal failure, repeat commands, restored verified state, and durable-swap
+resumption through Slot A payload comparison and TRIAL state.
+
+After programming 1.0.5, retry the complete signed container: the previous
+IMAGE_REJECTED download is not pending/activatable. Capture the final download
+response and `0x1F51` response. Do not interrupt power while swapping.
+An empty initial Slot A provides no valid old application to roll back to;
+a failed first trial can therefore return to recovery rather than an old app.
 
 ### 1.0.4 post-Flash timeout clock correction
 
@@ -337,6 +381,8 @@ The SDO server implements:
 | `0x2001:00` | RO, U8 | Public update state |
 | `0x2002:00` | WO, DOMAIN | Sequential firmware payload, segmented SDO download |
 | `0x1F50:01` | WO, DOMAIN | 152-byte signed manifest followed by image; automatic verify to VERIFIED, no activation |
+| `0x1F51:00` | RO, U8 | Program count 1 |
+| `0x1F51:01` | WO, U8 | Observed LiftAppTool start value `1`: schedule verified Slot B activation; other values unsupported |
 | `0x2003:00` | RO, U32 | Firmware CRC-32 |
 | `0x2004:00` | RO, U32 | Firmware payload size |
 | `0x2005:00` | RO, U32 | Pending version |
@@ -402,9 +448,9 @@ These tests do not replace target link-size,
 FDCAN, flash-bank, power-cut, signature interoperability, LiftAppTool, or
 CiA conformance testing.
 
-The 1.0.4 Debug/Release verifier and LTO image contain 35,632 bytes of
+The 1.0.5 Debug/Release verifier and LTO image contain 35,788 bytes of
 text, 84 bytes of initialized data and 5,700 bytes of BSS. The load image ends
-at `0x08008B68`, leaving 1,144 bytes before the fixed discovery record at
+at `0x08008C00`, leaving 992 bytes before the fixed discovery record at
 `0x08008FE0`. The record contains
 the protocol, layout and signing gate and is checked by the application.
 The linker asserts that the load image cannot overlap this record or either
@@ -412,7 +458,7 @@ application slot. The exported bootloader BIN spans exactly 36 KiB including
 the record and address gap, not 36 KiB of executable code.
 Both projects automatically generate the raw BIN in their selected Debug/Release
 output directory after a successful CubeIDE build.
-Both 1.0.4 BIN outputs are byte-identical. The 1.0.3 ELF inspection confirmed that TIM14
+Both 1.0.5 BIN outputs are byte-identical. The 1.0.3 ELF inspection confirmed that TIM14
 and both shared TIM16/TIM17/FDCAN vectors resolve to Default_Handler, TIM1
 retains its tick handler, and HAL_FDCAN_IRQHandler/FDCAN2/TIM17 handles are not
 linked into the bootloader.

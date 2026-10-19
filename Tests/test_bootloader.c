@@ -1223,6 +1223,104 @@ static void testReceivePollAfterErase(void)
     puts("Receive -> 2455 ms erase -> stale poll: segmented/block, wrap, full transfer and real timeout boundaries OK");
 }
 
+static void testProgramStartCommand(void)
+{
+    uint32_t path, mode;
+    for (path = 0U; path < 2U; ++path) {
+        for (mode = 0U; mode < 13U; ++mode) {
+            FakeFlash flash;
+            FakeNvm nvm;
+            PsStore store;
+            PsData persistent;
+            BootloaderInterface bootloader;
+            FirmwareUpdate update;
+            FiData factory;
+            BootOd od;
+            CoSdo sdo;
+            BlTransaction transaction;
+            CoFrame request = {0}, reply;
+            uint8_t image[256];
+            uint8_t record[BL_MANIFEST_RECORD_SIZE];
+            uint8_t container[BL_MANIFEST_RECORD_SIZE + sizeof(image)];
+            BlImageManifest manifest;
+            uint32_t sequence;
+            uint32_t bank_programs;
+            memset(image, 0x5AU, sizeof(image));
+            initContainerFixture(&flash, &nvm, &store, &persistent,
+                                 &bootloader, &update, &factory, &od, &sdo);
+            BlTransaction_Init(&transaction, &bootloader, &store, &persistent);
+            od.transaction = &transaction;
+            assert(BootOd_CheckDownload(&od, 0x1F51U, 0U, 1U, true) == CO_ABORT_READ_ONLY);
+            assert(BootOd_CheckDownload(&od, 0x1F51U, 2U, 1U, true) == CO_ABORT_SUBINDEX);
+            assert(BootOd_CheckDownload(&od, 0x1F51U, 1U, 4U, true) == CO_ABORT_LENGTH);
+            {
+                uint8_t bytes[4];
+                uint32_t size;
+                assert(BootOd_Read(&od, 0x1F51U, 0U, bytes, &size) == 0U);
+                assert(size == 1U && bytes[0] == 1U);
+                assert(BootOd_Read(&od, 0x1F51U, 1U, bytes, &size) == CO_ABORT_WRITE_ONLY);
+                assert(BootOd_Read(&od, 0x1F51U, 2U, bytes, &size) == CO_ABORT_SUBINDEX);
+            }
+            makeContainer(image, sizeof(image), &manifest, record, container);
+            if (mode != 1U) {
+                assert(sendContainerBlock(&sdo, container, sizeof(container), false) == 0U);
+                assert(persistent.update_state == BL_TX_VERIFIED);
+            }
+            if (mode == 1U) { update.state = FWU_RECEIVING; }
+            if (mode == 2U) { persistent.update_state = BL_TX_IDLE;
+                persistent.update_result = FWU_RESULT_IMAGE_REJECTED; }
+            if (mode == 3U) { flash.diagnostics.value[BL_DIAG_OPERATION] = 7U; }
+            if (mode == 4U) { od.update_auth_available = false; }
+            if (mode == 5U) { store.io.write = failingNvmWrite; }
+            if (mode == 6U) { od.container_active = true; }
+            if (mode == 8U) { update.state = FWU_IDLE; od.manifest_valid = false; }
+            if (mode == 9U) { persistent.pending_slot = UINT32_MAX; }
+            if (mode == 10U) { bootloader.pending_slot = BL_NO_SLOT; }
+            if (mode == 11U) { update.state = FWU_FAILED; }
+            if (mode == 12U) { transaction.failed = true; }
+            sequence = store.sequence;
+            bank_programs = flash.program_count;
+            request.id = 0x67EU;
+            request.length = 8U;
+            request.data[0] = 0x2FU;
+            Co_Put16(&request.data[1], path ? 0x2000U : 0x1F51U);
+            request.data[3] = path ? 0U : 1U;
+            request.data[4] = path ? 3U : ((mode == 7U) ? 2U : 1U);
+            /* Vendor path has its own invalid-command handling; exercise value 2 on 1F51 only. */
+            if (mode == 7U && path) { request.data[4] = 0xFFU; }
+            assert(CoSdo_Receive(&sdo, &request, 0U, &reply));
+            if (mode == 0U || mode == 8U) {
+                assert(reply.data[0] == 0x60U);
+                assert(Co_Get16(&reply.data[1]) == (path ? 0x2000U : 0x1F51U));
+                assert(store.sequence == sequence + 1U);
+                assert(persistent.update_state == BL_TX_SWAP_FORWARD_BASE);
+                assert(BlTransaction_IsBusy(&transaction));
+                assert(CoSdo_Receive(&sdo, &request, 0U, &reply));
+                assert(reply.data[0] == 0x80U);
+                assert(store.sequence == sequence + 1U);
+                /* Resume the persisted swap with reset-time runtime objects. */
+                assert(Ps_Load(&store, &persistent) == PS_OK);
+                BlTransaction_Init(&transaction, &bootloader, &store, &persistent);
+                while (BlTransaction_IsBusy(&transaction)) {
+                    assert(BlTransaction_Poll(&transaction));
+                }
+                assert(persistent.update_state == BL_TX_TRIAL);
+                assert(memcmp(&flash.bytes[bootloader.layout.slot[0].address -
+                                          TEST_FLASH_START], image, sizeof(image)) == 0);
+            } else {
+                assert(reply.data[0] == 0x80U);
+                assert(store.sequence == sequence);
+                assert(flash.program_count == bank_programs);
+                if (mode == 3U || mode == 5U || mode == 12U) {
+                    assert(Co_Get32(&reply.data[4]) == CO_ABORT_HARDWARE);
+                }
+            }
+            assert(flash.activate_count == 0U);
+        }
+    }
+    puts("1F51:01=1 / vendor activation: verified-only gate, invalid/fault rejection and restartable A/B swap OK");
+}
+
 static void testContainerFailureDiagnostics(void)
 {
     FakeFlash flash;
@@ -1298,9 +1396,9 @@ static void testContainerFailureDiagnostics(void)
         uint8_t value[16];
         uint32_t size;
         assert(BootOd_Read(&od, 0x100AU, 0U, value, &size) == 0U);
-        assert(size == 5U && memcmp(value, "1.0.4", 5U) == 0);
+        assert(size == 5U && memcmp(value, "1.0.5", 5U) == 0);
         assert(BootOd_Read(&od, 0x200DU, 0U, value, &size) == 0U);
-        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010004));
+        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010005));
     }
     flash.diagnostics.value[BL_DIAG_STAGE] = 3U;
     flash.diagnostics.value[BL_DIAG_OPERATION] = 0x00030003U;
@@ -1529,6 +1627,7 @@ int main(void)
     testObjectDictionaryAndSdo(256U);
     testSignedContainerDownloads();
     testReceivePollAfterErase();
+    testProgramStartCommand();
     testContainerFailureDiagnostics();
     testBlockDownload();
     puts("All portable bootloader tests passed.");

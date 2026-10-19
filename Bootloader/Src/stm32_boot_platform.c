@@ -235,7 +235,7 @@ static bool verifyManifest(void *user, const BlImageManifest *manifest)
     return BlAuth_VerifyManifest(manifest);
 }
 
-static bool vectorValid(uint32_t slot_address, uint32_t image_size)
+static bool vectorValid(const volatile uint32_t *vectors, uint32_t image_size)
 {
     uint32_t stack_pointer;
     uint32_t reset_handler;
@@ -243,13 +243,13 @@ static bool vectorValid(uint32_t slot_address, uint32_t image_size)
     if ((image_size < 8U) || (image_size > BL_SLOT_IMAGE_MAX)) {
         return false;
     }
-    stack_pointer = *(const volatile uint32_t *)(uintptr_t)slot_address;
-    reset_handler = *(const volatile uint32_t *)(uintptr_t)(slot_address + 4U);
+    stack_pointer = vectors[0];
+    reset_handler = vectors[1];
     return ((stack_pointer >= UINT32_C(0x20000000)) &&
             (stack_pointer <= ram_end) && ((stack_pointer & 7U) == 0U) &&
             ((reset_handler & 1U) != 0U) &&
-            ((reset_handler & ~UINT32_C(1)) >= slot_address) &&
-            ((reset_handler & ~UINT32_C(1)) < (slot_address + image_size)));
+            ((reset_handler & ~UINT32_C(1)) >= BL_SLOT_A_START) &&
+            ((reset_handler & ~UINT32_C(1)) < (BL_SLOT_A_START + image_size)));
 }
 
 static bool readManifest(uint8_t slot, BlImageManifest *manifest)
@@ -279,7 +279,9 @@ static bool validateImage(BlStm32Context *context, uint8_t slot,
         return false;
     }
     address = layout.slot[slot].address;
-    if (!vectorValid(address, manifest->image_size) ||
+    /* Both stored images are linked for execution from Slot A after swapping. */
+    if (!vectorValid((const volatile uint32_t *)(uintptr_t)address,
+                     manifest->image_size) ||
         (verifyManifest(context, manifest) == false)) {
         return false;
     }

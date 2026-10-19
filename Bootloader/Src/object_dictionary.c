@@ -9,7 +9,7 @@
 #define BOOT_PROFILE_VERSION 1U
 #define BOOT_HANDOFF_VERSION 2U
 #define BOOT_EXECUTION_MODE 1U
-#define BOOT_SOFTWARE_VERSION UINT32_C(0x00010004)
+#define BOOT_SOFTWARE_VERSION UINT32_C(0x00010005)
 #define BOOT_HEARTBEAT_DEFAULT 1000U
 
 static uint32_t writeNumber(uint8_t *data, uint32_t *size, uint32_t value,
@@ -138,7 +138,7 @@ uint32_t BootOd_Read(void *user, uint16_t index, uint8_t subindex,
         text = "1.0";
         break;
     case 0x100AU:
-        text = "1.0.4";
+        text = "1.0.5";
         break;
     case 0x1014U:
         value = 0x80U + od->node_id;
@@ -178,6 +178,7 @@ uint32_t BootOd_Read(void *user, uint16_t index, uint8_t subindex,
         }
         break;
     case 0x1F50U:
+    case 0x1F51U:
         if (subindex == 1U) { return CO_ABORT_WRITE_ONLY; }
         if (subindex != 0U) { return CO_ABORT_SUBINDEX; }
         return writeNumber(data, size, 1U, 1U);
@@ -294,6 +295,12 @@ uint32_t BootOd_CheckDownload(void *user, uint16_t index, uint8_t subindex,
         return (subindex <= BL_DIAG_COUNT + 2U) ?
             CO_ABORT_READ_ONLY : CO_ABORT_SUBINDEX;
     }
+    if (index == 0x1F51U) {
+        if (subindex != 1U) {
+            return (subindex == 0U) ? CO_ABORT_READ_ONLY : CO_ABORT_SUBINDEX;
+        }
+        return (size == 1U) ? 0U : CO_ABORT_LENGTH;
+    }
     if (subindex != 0U) {
         return CO_ABORT_SUBINDEX;
     }
@@ -361,6 +368,22 @@ static bool clearReceivingState(BootOd *od, uint32_t result)
     return true;
 }
 
+static uint32_t scheduleActivation(BootOd *od)
+{
+    if (!od->factory_valid || !od->update_auth_available ||
+        od->container_active || (od->transaction == NULL) ||
+        (od->persistent->update_state != BL_TX_VERIFIED) ||
+        (od->persistent->update_result != FWU_RESULT_NONE) ||
+        (od->persistent->pending_slot != 1U) ||
+        (od->bootloader->pending_slot != 1U) ||
+        (od->update->state == FWU_RECEIVING) ||
+        (od->update->state == FWU_FAILED)) {
+        return CO_ABORT_STATE;
+    }
+    return BlTransaction_ScheduleActivation(od->transaction) ?
+        0U : CO_ABORT_HARDWARE;
+}
+
 uint32_t BootOd_Write(void *user, uint16_t index, uint8_t subindex,
                       const uint8_t *data, uint32_t size, uint32_t now)
 {
@@ -380,6 +403,9 @@ uint32_t BootOd_Write(void *user, uint16_t index, uint8_t subindex,
     abort_code = BootOd_CheckDownload(od, index, subindex, size, true);
     if (abort_code != 0U) {
         return abort_code;
+    }
+    if (index == 0x1F51U) {
+        return (data[0] == 1U) ? scheduleActivation(od) : CO_ABORT_VALUE;
     }
     if (index == 0x1003U) {
         CoFrame reset_frame;
@@ -460,10 +486,8 @@ uint32_t BootOd_Write(void *user, uint16_t index, uint8_t subindex,
             FirmwareUpdateResult result = FirmwareUpdate_Finish(od->update, now);
             return (result == FWU_RESULT_NONE) ? 0U : CO_ABORT_HARDWARE;
         }
-        if ((command == 3U) &&
-            (od->persistent->update_state == BL_TX_VERIFIED) &&
-            BlTransaction_ScheduleActivation(od->transaction)) {
-            return 0U;
+        if (command == 3U) {
+            return scheduleActivation(od);
         }
         if (command == 0U) {
             od->container_active = false;
