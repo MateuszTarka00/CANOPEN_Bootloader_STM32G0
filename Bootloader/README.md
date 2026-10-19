@@ -145,8 +145,9 @@ Bench procedure:
 1. Back up Flash. Program only `Debug\CANOPEN_Bootloader_STM32G0.bin` or
    `Release\CANOPEN_Bootloader_STM32G0.bin` (36,864 bytes) at `0x08000000`
    using SWD, **without mass erase**; preserve application, factory and NVM.
-2. Enter service mode as before. Read Node 126 `0x100A:00` = `1.0.2`,
-   `0x200D:00` = `0x00010002`, and `0x2010:00` = 14 to verify this image.
+2. Power-cycle after programming, then enter service mode as before.
+   Read Node 126 `0x100A:00` = `1.0.3`, `0x200D:00` = `0x00010003`,
+   and `0x2010:00` = 14 to verify this image.
 3. Retry the **same signed 28,708-byte file**, capturing full CAN traffic.
    If it aborts, do not reset/retry yet: read every `0x2010:01..0E` and
    `0x2007:00`, saving the raw values alongside the trace.
@@ -163,6 +164,32 @@ Bench procedure:
 No new `0x1F51`, password or activation metadata is defined. Wizard activation
 and full interoperability still require evidence. These diagnostics identify
 the actual failing path; they are not a claim that the physical fault is fixed.
+
+### 1.0.3 polling-only peripheral configuration
+
+The bootloader initializes FDCAN1 only and receives frames by polling FIFO0.
+Previously its RX notification enabled the shared interrupt handler, which
+also called HAL for the uninitialized FDCAN2 handle (`Instance == NULL`).
+The HAL then accessed addresses `0x00000050`/`0x00000054` as CAN IR/IE.
+With the normal main-Flash boot alias these are vector-table locations,
+and nonzero masked values can cause attempted stores to `0x00000050`.
+Inspection of the previous ELF confirmed these store branches were reachable.
+This is a software defect consistent with the observed Flash errors, but its
+relationship to every captured PGAERR/PGSERR/CFGBSY fault still needs hardware
+confirmation.
+
+FDCAN MSP initialization no longer enables either shared NVIC line, and the
+boot adapter no longer activates RX interrupts. Unused TIM14 and shared
+TIM16/TIM17/FDCAN handlers have been removed, retaining the startup fail-stop
+default rather than accessing uninitialized handles. TIM1 remains the active
+HAL tick interrupt. Voltage-scaling failure now enters Error_Handler before
+PLL/clock configuration. Application RTOS/CAN interrupt handling is unchanged.
+
+No bank mapping, Flash guard, flag clearing, option bytes, journal format or
+signed-container protocol has changed. With the captured two-bank/no-swap
+configuration, journal addresses `0x0803F000` and `0x0803F800` map to bank 2,
+local pages 62 and 63. A hardware retry after a power cycle is required;
+do not clear error flags to manufacture a passing result.
 
 ### 1.0.2 busy-Flash containment (partial mitigation)
 
@@ -332,6 +359,12 @@ STM32CubeIDE Debug/Release source lists include `Bootloader` and
 `ThirdParty`, exclude the unused FreeRTOS middleware/application task stub,
 and enable `-Os -flto` for compilation and linking. `Tests/run_native.py`
 runs the portable C99 tests using the development dependency's Zig compiler.
+The peripheral regression compiles production FDCAN MSP/boot initialization,
+clock configuration and TIM1 ISR bodies with observable HAL substitutes.
+It checks polling-only CAN without NVIC/RX notification activation, an untouched
+FDCAN2 handle, initialization failure propagation, TIM1 dispatch, and fail-stop
+behavior before clock setup when voltage scaling fails. The runner also rejects
+unused CAN/TIM14/TIM17 handle dependencies in the bootloader ISR source.
 The Flash regression compiles the actual synchronous HAL function bodies with
 observable register/erase/program substitutes and the production guard header,
 covering errors, CFGBSY, BSY1/2, timeout, tick wrap/stall, suppressed cleanup/lock,
@@ -345,9 +378,9 @@ These tests do not replace target link-size,
 FDCAN, flash-bank, power-cut, signature interoperability, LiftAppTool, or
 CiA conformance testing.
 
-The containment 1.0.2 Debug/Release verifier and LTO image contain 36,392 bytes of
-text, 84 bytes of initialized data and 5,948 bytes of BSS. The load image ends
-at `0x08008E60`, leaving 384 bytes before the fixed discovery record at
+The 1.0.3 Debug/Release verifier and LTO image contain 35,552 bytes of
+text, 84 bytes of initialized data and 5,700 bytes of BSS. The load image ends
+at `0x08008B18`, leaving 1,224 bytes before the fixed discovery record at
 `0x08008FE0`. The record contains
 the protocol, layout and signing gate and is checked by the application.
 The linker asserts that the load image cannot overlap this record or either
@@ -355,6 +388,10 @@ application slot. The exported bootloader BIN spans exactly 36 KiB including
 the record and address gap, not 36 KiB of executable code.
 Both projects automatically generate the raw BIN in their selected Debug/Release
 output directory after a successful CubeIDE build.
+Both 1.0.3 BIN outputs are byte-identical. ELF inspection confirms that TIM14
+and both shared TIM16/TIM17/FDCAN vectors resolve to Default_Handler, TIM1
+retains its tick handler, and HAL_FDCAN_IRQHandler/FDCAN2/TIM17 handles are not
+linked into the bootloader.
 CubeIDE 1.16.1 still generates `.su`/`.cyclo` peer-output rules when the reports
 are disabled; clean LTO builds warn that these diagnostic outputs were not
 emitted. These are generator/report warnings, not linker overflow or C errors.

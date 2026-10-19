@@ -9,7 +9,7 @@
 #define BOOT_PROFILE_VERSION 1U
 #define BOOT_HANDOFF_VERSION 2U
 #define BOOT_EXECUTION_MODE 1U
-#define BOOT_SOFTWARE_VERSION UINT32_C(0x00010002)
+#define BOOT_SOFTWARE_VERSION UINT32_C(0x00010003)
 #define BOOT_HEARTBEAT_DEFAULT 1000U
 
 static uint32_t writeNumber(uint8_t *data, uint32_t *size, uint32_t value,
@@ -138,7 +138,7 @@ uint32_t BootOd_Read(void *user, uint16_t index, uint8_t subindex,
         text = "1.0";
         break;
     case 0x100AU:
-        text = "1.0.2";
+        text = "1.0.3";
         break;
     case 0x1014U:
         value = 0x80U + od->node_id;

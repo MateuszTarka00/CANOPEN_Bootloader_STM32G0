@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import argparse
+import re
 import struct
 import subprocess
 import sys
@@ -13,6 +14,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from Tools.package_firmware import DEFAULT_PRIVATE_KEY, load_private_key, make_signed_manifest
 from Tools.prepare_factory import factory_record
+
+
+def function_body(text: str, signature: str) -> str:
+    match = re.search(re.escape(signature) + r"\([^;{}]*\)\s*\{", text)
+    if match is None:
+        raise ValueError(f"Function definition not found: {signature}")
+    start, opening = match.start(), match.end() - 1
+    depth, end = 1, opening + 1
+    while depth:
+        depth += (text[end] == "{") - (text[end] == "}")
+        end += 1
+    return text[start:end]
 
 
 def main() -> None:
@@ -47,6 +60,25 @@ def main() -> None:
         shutil.rmtree(output)
     output.mkdir()
     try:
+        peripheral_functions = (
+            ("Core/Src/fdcan.c", "void HAL_FDCAN_MspInit"),
+            ("Bootloader/Src/stm32_boot_platform.c", "bool BlStm32_FdcanInit"),
+            ("Core/Src/main.c", "void SystemClock_Config"),
+            ("Core/Src/stm32g0xx_it.c", "void TIM1_BRK_UP_TRG_COM_IRQHandler"),
+        )
+        (output / "peripheral_bodies.inc").write_text("\n".join(
+            function_body((ROOT / source).read_text(), signature)
+            for source, signature in peripheral_functions
+        ))
+        executable = output / "test_boot_peripherals.exe"
+        subprocess.run(flags + ["-I" + str(output),
+                               str(ROOT / "Tests" / "test_boot_peripherals.c"),
+                               "-o", str(executable)], check=True)
+        subprocess.run([str(executable)], check=True)
+        interrupts = (ROOT / "Core" / "Src" / "stm32g0xx_it.c").read_text()
+        for unused in ("HAL_FDCAN_IRQHandler", "htim14", "htim17", "hfdcan2"):
+            if unused in interrupts:
+                raise RuntimeError(f"Unused bootloader interrupt dependency: {unused}")
         # Compile the production HAL function bodies, not a parallel state planner.
         hal = ROOT / "Drivers" / "STM32G0xx_HAL_Driver"
         functions = {
@@ -59,13 +91,7 @@ def main() -> None:
         for source, names in functions.items():
             text = (hal / "Src" / source).read_text()
             for name in names:
-                start = text.index("HAL_StatusTypeDef " + name + "(")
-                opening = text.index("{", start)
-                depth, end = 1, opening + 1
-                while depth:
-                    depth += (text[end] == "{") - (text[end] == "}")
-                    end += 1
-                bodies.append(text[start:end])
+                bodies.append(function_body(text, "HAL_StatusTypeDef " + name))
         (output / "flash_hal_bodies.inc").write_text("\n".join(bodies))
         executable = output / "test_flash_guard.exe"
         subprocess.run(flags + ["-I" + str(hal / "Inc"), "-I" + str(output),

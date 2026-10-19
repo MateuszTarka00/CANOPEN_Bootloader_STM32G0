@@ -573,9 +573,7 @@ bool BlStm32_FdcanInit(uint8_t node_id, uint32_t bitrate)
                                       FDCAN_REJECT,
                                       FDCAN_REJECT_REMOTE,
                                       FDCAN_REJECT_REMOTE) != HAL_OK) ||
-        (HAL_FDCAN_Start(&hfdcan1) != HAL_OK) ||
-        (HAL_FDCAN_ActivateNotification(
-             &hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0U) != HAL_OK)) {
+        (HAL_FDCAN_Start(&hfdcan1) != HAL_OK)) {
         return false;
     }
     return true;
