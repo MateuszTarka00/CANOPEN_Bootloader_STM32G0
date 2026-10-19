@@ -33,6 +33,7 @@ void CoSdo_Reset(CoSdo *sdo)
         sdo->offset = 0U;
         sdo->block_stream = false;
         sdo->block_crc = 0U;
+        sdo->block_padded_crc = 0U;
         sdo->block_tail_size = 0U;
         sdo->block_crc_enabled = false;
     }
@@ -303,6 +304,7 @@ static void startBlockDownload(CoSdo *sdo, const CoFrame *request,
         return;
     }
     sdo->block_crc = 0U;
+    sdo->block_padded_crc = 0U;
     sdo->block_crc_enabled = (command & 4U) != 0U;
     sdo->state = CO_SDO_BLOCK_DOWNLOAD;
     sdo->last_activity = currentTime(sdo, now);
@@ -330,7 +332,9 @@ static bool blockDownload(CoSdo *sdo, const CoFrame *request,
             return true;
         }
         if (sdo->block_crc_enabled &&
-            (Co_Get16(&request->data[1]) != sdo->block_crc)) {
+            (Co_Get16(&request->data[1]) != sdo->block_crc) &&
+            !(forceStream(sdo) && sdo->block_stream &&
+              (Co_Get16(&request->data[1]) == sdo->block_padded_crc))) {
             abortTransfer(sdo, reply, CO_ABORT_CRC);
             return true;
         }
@@ -376,6 +380,9 @@ static bool blockDownload(CoSdo *sdo, const CoFrame *request,
     sdo->block_crc = blockCrc(sdo->block_crc, &request->data[1], count);
     sdo->offset += count;
     if ((command & 0x80U) != 0U) {
+        /* LiftAppTool includes the actual unused tail bytes in its container CRC. */
+        sdo->block_padded_crc = blockCrc(sdo->block_crc,
+            &request->data[1U + count], 7U - count);
         sdo->block_tail_size = (uint8_t)count;
         sdo->state = CO_SDO_BLOCK_END;
     }

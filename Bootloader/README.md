@@ -150,7 +150,7 @@ Bench procedure:
    `Release\CANOPEN_Bootloader_STM32G0.bin` (36,864 bytes) at `0x08000000`
    using SWD, **without mass erase**; preserve application, factory and NVM.
 2. Power-cycle after programming, then enter service mode as before.
-   Read Node 126 `0x100A:00` = `1.0.6`, `0x200D:00` = `0x00010006`,
+   Read Node 126 `0x100A:00` = `1.0.7`, `0x200D:00` = `0x00010007`,
    and `0x2010:00` = 14 to verify this image.
 3. Retry the **same signed 28,708-byte file**, capturing full CAN traffic.
    If it aborts, do not reset/retry yet: read every `0x2010:01..0E` and
@@ -170,6 +170,50 @@ or new activation metadata is defined. The first transfer/activation/application
 launch was subsequently confirmed on hardware; repeated automatic entry and
 full interoperability still require hardware verification. These diagnostics identify
 the actual failing path; they are not a claim that the physical fault is fixed.
+
+### 1.0.7 LiftAppTool block CRC compatibility
+
+The supplied 29,352-byte `firmware_v1.update.bin` passes manifest signature,
+image SHA-256/CRC32 and vector checks. Its standard CRC16/XMODEM is `0x27CC`;
+the observed end-block request instead contains `0x45DA`, exactly the CRC of
+that file followed by six zero padding bytes. The end-block command declares
+six unused bytes. Production C replay reproduced abort `0x05040004` in 1.0.6.
+This establishes the current transfer mismatch, not why an earlier update
+succeeded; both old and current container lengths have remainder 1 modulo 7.
+
+For streaming `0x1F50:01` containers only, 1.0.7 accepts either the standard
+data-only CRC or a CRC extended with the actual unused bytes from the final
+segment. The declared size, sequence and unused-byte count must still agree.
+Padding is never passed to the image writer or included in image length.
+Other objects retain standard CRC behavior. No CRC bypass, zero-padding guess,
+signature exception or change to Flash/journal/NMT handling is introduced.
+Manifest authentication, compatibility, image CRC32/SHA-256, vectors and
+verified-only activation remain mandatory.
+
+Native regressions cover all seven final-segment lengths, standard and padded
+CRC, nonzero padding, bad CRC, wrong padding, wrong unused-byte count, domain
+scope and state reset. Container integration tests verify that a padded-CRC
+transfer reaches VERIFIED, while an altered payload with a matching transport
+CRC is still rejected. Replaying the exact uploaded BIN on the production C
+receiver now accepts both `0x27CC` and `0x45DA` and invokes stream completion.
+Hardware confirmation remains required.
+
+The uploaded manifest declares version `0x100`, although its application
+identifies as 0.1.1. The generated
+`out/firmware_v1-version-0.1.1.update.bin` corrects this to `0x101` and is signed
+again with the existing prototype key. Its 29,200-byte application payload is
+byte-identical to the uploaded image; only the manifest changes, and the whole
+container remains 29,352 bytes. Signature and exact container composition were
+verified. The original upload and factory record are not modified.
+
+Program the 36,864-byte Debug/Release bootloader BIN at `0x08000000` by SWD
+without mass erase, preserving factory/journal/slots, then power-cycle and
+retry the complete corrected container. Read Node 126 `0x100A=1.0.7` and
+`0x200D=0x00010007` before transfer. Factory identity need not be rewritten.
+If a valid application 0.1.1 is already running, use its addressed NMT entry;
+application 0.1.0 requires the earlier staged upgrade procedure below.
+If another failure occurs, retain the full trace and read `0x2010`/`0x2007`
+before resetting; the tool's automatic NMT reset clears volatile diagnostics.
 
 ### 1.0.6 addressed NMT discovery / application 0.1.1
 
@@ -507,9 +551,9 @@ These tests do not replace target link-size,
 FDCAN, flash-bank, power-cut, signature interoperability, LiftAppTool, or
 CiA conformance testing.
 
-The 1.0.6 Debug/Release verifier and LTO image contain 36,076 bytes of
+The 1.0.7 Debug/Release verifier and LTO image contain 36,172 bytes of
 text, 84 bytes of initialized data and 5,708 bytes of BSS. The load image ends
-at `0x08008D20`, leaving 704 bytes before the fixed discovery record at
+at `0x08008D80`, leaving 608 bytes before the fixed discovery record at
 `0x08008FE0`. The record contains
 the protocol, layout and signing gate and is checked by the application.
 The linker asserts that the load image cannot overlap this record or either
@@ -517,7 +561,7 @@ application slot. The exported bootloader BIN spans exactly 36 KiB including
 the record and address gap, not 36 KiB of executable code.
 Both projects automatically generate the raw BIN in their selected Debug/Release
 output directory after a successful CubeIDE build.
-Both 1.0.6 BIN outputs are byte-identical. The 1.0.3 ELF inspection confirmed that TIM14
+Both 1.0.7 BIN outputs are byte-identical. The 1.0.3 ELF inspection confirmed that TIM14
 and both shared TIM16/TIM17/FDCAN vectors resolve to Default_Handler, TIM1
 retains its tick handler, and HAL_FDCAN_IRQHandler/FDCAN2/TIM17 handles are not
 linked into the bootloader.

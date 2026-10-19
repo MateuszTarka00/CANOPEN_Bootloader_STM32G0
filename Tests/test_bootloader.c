@@ -921,8 +921,8 @@ static uint16_t testBlockCrc(uint16_t crc, const uint8_t *data, uint32_t size)
     return crc;
 }
 
-static uint32_t sendContainerBlock(CoSdo *sdo, const uint8_t *container,
-                                   uint32_t size, bool corrupt_crc)
+static uint32_t sendContainerBlockCrc(CoSdo *sdo, const uint8_t *container,
+                                      uint32_t size, bool corrupt_crc, bool padded)
 {
     CoFrame request = {0}, reply;
     uint32_t offset;
@@ -953,11 +953,21 @@ static uint32_t sendContainerBlock(CoSdo *sdo, const uint8_t *container,
             return Co_Get32(&reply.data[4]);
         }
     }
+    if (padded && (size % 7U != 0U)) {
+        crc = testBlockCrc(crc, &request.data[1U + size % 7U],
+                           7U - size % 7U);
+    }
     request.data[0] = (uint8_t)(0xC1U |
         (((7U - size % 7U) % 7U) << 2U));
     Co_Put16(&request.data[1], (uint16_t)(crc ^ (corrupt_crc ? 1U : 0U)));
     assert(CoSdo_Receive(sdo, &request, size + 1U, &reply));
     return (reply.data[0] == 0x80U) ? Co_Get32(&reply.data[4]) : 0U;
+}
+
+static uint32_t sendContainerBlock(CoSdo *sdo, const uint8_t *container,
+                                   uint32_t size, bool corrupt_crc)
+{
+    return sendContainerBlockCrc(sdo, container, size, corrupt_crc, false);
 }
 
 static void testSignedContainerDownloads(void)
@@ -1006,6 +1016,24 @@ static void testSignedContainerDownloads(void)
         assert(update.state == FWU_PENDING &&
                persistent.update_state == BL_TX_VERIFIED);
         assert(flash.pending_count == 1U && flash.activate_count == 0U);
+
+        initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                             &update, &factory, &od, &sdo);
+        assert(sendContainerBlockCrc(&sdo, small_container,
+                                    sizeof(small_container), false, true) == 0U);
+        assert(update.state == FWU_PENDING &&
+               persistent.update_state == BL_TX_VERIFIED);
+        assert(flash.pending_count == 1U && flash.activate_count == 0U);
+
+        /* Compatible transport CRC must not bypass the signed image's CRC32. */
+        small_container[sizeof(small_container) - 1U] ^= 1U;
+        initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                             &update, &factory, &od, &sdo);
+        assert(sendContainerBlockCrc(&sdo, small_container,
+                                    sizeof(small_container), false, true) == CO_ABORT_HARDWARE);
+        assert(persistent.update_state != BL_TX_VERIFIED);
+        assert(flash.pending_count == 0U && flash.activate_count == 0U);
+        small_container[sizeof(small_container) - 1U] ^= 1U;
 
         initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
                              &update, &factory, &od, &sdo);
@@ -1401,9 +1429,9 @@ static void testContainerFailureDiagnostics(void)
         uint8_t value[16];
         uint32_t size;
         assert(BootOd_Read(&od, 0x100AU, 0U, value, &size) == 0U);
-        assert(size == 5U && memcmp(value, "1.0.6", 5U) == 0);
+        assert(size == 5U && memcmp(value, "1.0.7", 5U) == 0);
         assert(BootOd_Read(&od, 0x200DU, 0U, value, &size) == 0U);
-        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010006));
+        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010007));
     }
     flash.diagnostics.value[BL_DIAG_STAGE] = 3U;
     flash.diagnostics.value[BL_DIAG_OPERATION] = 0x00030003U;
@@ -1617,8 +1645,65 @@ static void testBlockDownload(void)
     puts("SDO block download: sizes 1..256 and 104 KiB, XMODEM CRC, Node 126, sequence/timeout/abort/write errors OK");
 }
 
+static void testContainerPaddingCrc(void)
+{
+    CoSdo sdo;
+    BlockSink sink;
+    CoFrame request = {0}, reply;
+    uint8_t data[21];
+    uint32_t tail, mode, i, offset;
+    request.id = 0x67EU; request.length = 8U;
+    for (tail = 1U; tail <= 7U; ++tail) {
+        uint32_t length = 14U + tail;
+        for (mode = 0U; mode < 6U; ++mode) {
+            uint16_t crc;
+            bool success = mode < 2U;
+            for (i = 0U; i < sizeof(data); ++i) {
+                data[i] = (i < length) ? (uint8_t)(i + 1U) :
+                    (uint8_t)(0xA0U + i);
+            }
+            initBlockTest(&sdo, &sink);
+            blockStart(&sdo, length, true);
+            for (offset = 0U; offset < length; offset += 7U) {
+                request.data[0] = offset + 7U >= length ? 0x81U : 1U;
+                memcpy(&request.data[1], &data[offset], 7U);
+                assert(CoSdo_Receive(&sdo, &request, 1U, &reply));
+                assert(reply.data[0] == 0xA2U);
+            }
+            assert(sink.written == length && sink.completed == 0U);
+            assert(memcmp(sink.data, data, length) == 0);
+            crc = testBlockCrc(0U, data, mode == 0U ? length : sizeof(data));
+            if (mode == 2U) { crc ^= 1U; }
+            if (mode == 3U) {
+                /* Compatibility must not leak into another domain. */
+                sdo.index = 0x2002U;
+                if (tail == 7U) { crc ^= 1U; }
+            }
+            if (mode == 4U) {
+                /* A CRC computed with different padding is not accepted. */
+                data[20] ^= 1U;
+                crc = testBlockCrc(0U, data, sizeof(data));
+            }
+            request.data[0] = (uint8_t)(0xC1U | ((7U - tail) << 2U));
+            if (mode == 5U) { request.data[0] ^= 4U; }
+            Co_Put16(&request.data[1], crc);
+            assert(CoSdo_Receive(&sdo, &request, 2U, &reply));
+            assert(reply.data[0] == (success ? 0xA1U : 0x80U));
+            if (!success) {
+                assert(Co_Get32(&reply.data[4]) ==
+                       (mode == 5U ? CO_ABORT_LENGTH : CO_ABORT_CRC));
+            }
+            assert(sink.completed == (success ? 1U : 0U));
+            assert(sink.aborted == (success ? 0U : 1U));
+            assert(sdo.state == CO_SDO_IDLE && sdo.block_padded_crc == 0U);
+        }
+    }
+    puts("Container CRC: standard/padded, all tail lengths, actual padding, domain scope and invalid CRC/length OK");
+}
+
 int main(void)
 {
+    testContainerPaddingCrc();
     testSha256();
     testEd25519();
     testPersistentUpdateStateValidation();

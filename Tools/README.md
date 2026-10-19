@@ -77,6 +77,10 @@ erasing; after payload CRC/read-back/image checks pass, the update remains
 VERIFIED. This path does not activate or reset the device. It is a transport
 contract for the bootloader, not a claim of complete LiftAppTool wizard
 interoperability. Do not send the ZIP or a bare application BIN to `0x1F50:01`.
+Bootloader 1.0.7 accepts the standard data-only block CRC16 or, only for this
+container object, the observed LiftAppTool CRC including actual unused final
+segment bytes. Clients under our control should continue using standard CRC.
+Padding is not written to the image; all signed image checks remain unchanged.
 
 ## First programming / SWD recovery
 

@@ -48,6 +48,7 @@ typedef struct {
     uint32_t last_activity;
     uint32_t timeout_ms;
     uint16_t block_crc;
+    uint16_t block_padded_crc;
     uint8_t block_tail_size;
     bool block_crc_enabled;
     bool block_stream;
