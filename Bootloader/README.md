@@ -145,8 +145,8 @@ Bench procedure:
 1. Back up Flash. Program only `Debug\CANOPEN_Bootloader_STM32G0.bin` or
    `Release\CANOPEN_Bootloader_STM32G0.bin` (36,864 bytes) at `0x08000000`
    using SWD, **without mass erase**; preserve application, factory and NVM.
-2. Enter service mode as before. Read Node 126 `0x100A:00` = `1.0.1`,
-   `0x200D:00` = `0x00010001`, and `0x2010:00` = 14 to verify this image.
+2. Enter service mode as before. Read Node 126 `0x100A:00` = `1.0.2`,
+   `0x200D:00` = `0x00010002`, and `0x2010:00` = 14 to verify this image.
 3. Retry the **same signed 28,708-byte file**, capturing full CAN traffic.
    If it aborts, do not reset/retry yet: read every `0x2010:01..0E` and
    `0x2007:00`, saving the raw values alongside the trace.
@@ -163,6 +163,51 @@ Bench procedure:
 No new `0x1F51`, password or activation metadata is defined. Wizard activation
 and full interoperability still require evidence. These diagnostics identify
 the actual failing path; they are not a claim that the physical fault is fixed.
+
+### 1.0.2 busy-Flash containment (partial mitigation)
+
+The supplied `callStack.PNG`, `rejestry.PNG` and `rejestry flash.PNG` show a
+HardFault during manifest-completion journal erase, with `CFGBSY=1`,
+`BSY1=BSY2=0`, `SR=0x00040000` and `CR=0x40000088` (LOCK clear).
+The optimized/LTO call stack attributes the location to `HAL_FLASH_Lock`
+inside `flashEraseRaw`; this does **not** prove the exact faulting instruction
+or explain why CFGBSY remained asserted. This release contains subsequent
+unsafe control writes; it is not a demonstrated root-cause cure.
+
+Both projects use the same local synchronous HAL guard. Before unlock, operation
+start, completion cleanup and lock, it checks all BSY1/BSY2/CFGBSY flags and Flash
+errors. Waiting is bounded by 1 s or 1,000,000 polling iterations, whichever
+comes first (including a stopped tick; tick arithmetic tolerates wrap).
+On the first error/timeout, it snapshots SR **before** any flag clearing or
+cleanup and latches a volatile fault until MCU reset. No PER/PG cleanup or LOCK
+write follows a failed wait, and subsequent erase/program/unlock/lock requests
+are rejected even if the busy flags later clear. No dummy Flash writes or
+option-byte changes are used. These paths are synchronous and serialized;
+interrupt/option-byte programming is not part of either adapter's API.
+
+The boot adapter also latches HAL/unlock/lock/readback failures. Existing SDO
+uploads and the CAN service loop remain enabled if the hardware can continue
+executing; further downloads, journal writes and activation are rejected until
+reset. Failure diagnostics cannot be cleared by starting another transfer.
+`0x2010` retains its existing 14-subindex wire layout:
+subindex 03 now packs the original operation in bits 0..15 and guard stage in
+bits 16..31. Guard stages are 0 = adapter/HAL failure outside a wait,
+1 = pre-unlock, 2 = pre-operation, 3 = operation completion,
+4 = before PER/PG cleanup, 5 = pre-lock. Subindex 01 retains the first failing
+update stage; 04 is HAL status (1 error, 2 busy, 3 timeout), 05 the error mask,
+06 the first SR, and 07..0C retain address/bank/page/page-error/OPTR/bank count.
+For example, operation `0x00030003`, status 3, SR `0x00040000` identifies
+erase-completion timeout with CFGBSY, **before** cleanup or lock.
+
+For the next bench attempt, follow the selective bootloader reflash above;
+the existing signed application/package and factory/journal need not be replaced.
+The application adapter is hardened for its next normal signed deployment,
+not a reason to overwrite Slot A directly or invalidate its signature metadata.
+Capture the complete CAN trace, version reads, all `0x2010:01..0E`,
+`0x2001:00` and `0x2007:00` immediately after the first abort, before resetting.
+Do not activate or repeatedly retry after a latched fault. No debugger reading
+is needed for this evidence; whether the original HardFault is avoided still
+requires this controlled hardware test.
 
 ## Flash map
 
@@ -287,15 +332,23 @@ STM32CubeIDE Debug/Release source lists include `Bootloader` and
 `ThirdParty`, exclude the unused FreeRTOS middleware/application task stub,
 and enable `-Os -flto` for compilation and linking. `Tests/run_native.py`
 runs the portable C99 tests using the development dependency's Zig compiler.
+The Flash regression compiles the actual synchronous HAL function bodies with
+observable register/erase/program substitutes and the production guard header,
+covering errors, CFGBSY, BSY1/2, timeout, tick wrap/stall, suppressed cleanup/lock,
+sticky rejection and first-SR preservation. Portable SDO tests also verify that
+a latched adapter fault preserves diagnostics and rejects activation/retries
+without Flash/journal writes. The runner checks that both projects' guarded
+HAL sources and headers remain identical.
 Per-source `.su`/`.cyclo` reports are disabled: GCC does not emit these during
 LTO compilation. A target stack-depth assessment remains separate work.
 These tests do not replace target link-size,
 FDCAN, flash-bank, power-cut, signature interoperability, LiftAppTool, or
 CiA conformance testing.
 
-The diagnostic 1.0.1 Debug/Release verifier and LTO image contain 36,144 bytes of
-text, 84 bytes of initialized data and 5,940 bytes of BSS. The load image leaves
-632 bytes before the fixed discovery record at `0x08008FE0`. The record contains
+The containment 1.0.2 Debug/Release verifier and LTO image contain 36,392 bytes of
+text, 84 bytes of initialized data and 5,948 bytes of BSS. The load image ends
+at `0x08008E60`, leaving 384 bytes before the fixed discovery record at
+`0x08008FE0`. The record contains
 the protocol, layout and signing gate and is checked by the application.
 The linker asserts that the load image cannot overlap this record or either
 application slot. The exported bootloader BIN spans exactly 36 KiB including

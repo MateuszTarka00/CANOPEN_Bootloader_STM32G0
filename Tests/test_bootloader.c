@@ -1174,7 +1174,39 @@ static void testContainerFailureDiagnostics(void)
             assert(readDiagnostic(&sdo, 13U) == FWU_RESULT_NONE);
         }
     }
-    puts("28708-byte container: NVM/erase failure diagnostics survive abort; retry and slow erase across tick wrap OK");
+    initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                         &update, &factory, &od, &sdo);
+    {
+        uint8_t value[16];
+        uint32_t size;
+        assert(BootOd_Read(&od, 0x100AU, 0U, value, &size) == 0U);
+        assert(size == 5U && memcmp(value, "1.0.2", 5U) == 0);
+        assert(BootOd_Read(&od, 0x200DU, 0U, value, &size) == 0U);
+        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010002));
+    }
+    flash.diagnostics.value[BL_DIAG_STAGE] = 3U;
+    flash.diagnostics.value[BL_DIAG_OPERATION] = 0x00030003U;
+    flash.diagnostics.value[BL_DIAG_STATUS] = 3U;
+    flash.diagnostics.value[BL_DIAG_SR] = 0x40000U;
+    {
+        BlDiagnostics first = flash.diagnostics;
+        FakeNvm before = nvm;
+        uint8_t command = 3U;
+        persistent.update_state = BL_TX_VERIFIED;
+        assert(BootOd_Write(&od, 0x2000U, 0U, &command, 1U, 0U) ==
+               CO_ABORT_HARDWARE);
+        persistent.update_state = BL_TX_IDLE;
+        assert(sendContainerBlock(&sdo, container, sizeof(container), false) ==
+               CO_ABORT_HARDWARE);
+        BlDiagnosticStage(&bootloader, 99U);
+        assert(memcmp(&first, &flash.diagnostics, sizeof(first)) == 0);
+        assert(memcmp(&before, &nvm, sizeof(nvm)) == 0);
+        assert(flash.erase_count == 0U && flash.program_count == 0U &&
+               flash.activate_count == 0U);
+        assert(readDiagnostic(&sdo, 3U) == 0x00030003U);
+        assert(readDiagnostic(&sdo, 6U) == 0x40000U);
+    }
+    puts("28708-byte container: diagnostics, sticky hardware fault/activation gate, retry and tick wrap OK");
 }
 
 typedef struct {

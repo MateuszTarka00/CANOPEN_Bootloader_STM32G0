@@ -116,6 +116,7 @@ FLASH_ProcessTypeDef pFlash  = {.Lock = HAL_UNLOCKED, \
                                 .Page = 0U, \
                                 .NbPagesToErase = 0U
                                };
+FLASH_GuardState FLASH_Guard;
 /**
   * @}
   */
@@ -165,6 +166,8 @@ HAL_StatusTypeDef HAL_FLASH_Program(uint32_t TypeProgram, uint32_t Address, uint
 {
   HAL_StatusTypeDef status;
 
+  if (FLASH_Guard.status != HAL_OK) { return FLASH_Guard.status; }
+
   /* Check the parameters */
   assert_param(IS_FLASH_TYPEPROGRAM(TypeProgram));
 
@@ -197,10 +200,10 @@ HAL_StatusTypeDef HAL_FLASH_Program(uint32_t TypeProgram, uint32_t Address, uint
     }
 
     /* Wait for last operation to be completed */
-    status = FLASH_WaitForLastOperation(FLASH_TIMEOUT_VALUE);
+    status = FLASH_GuardReady(3U, FLASH_TIMEOUT_VALUE);
 
     /* If the program operation is completed, disable the PG or FSTPG Bit */
-    CLEAR_BIT(FLASH->CR, TypeProgram);
+    status = FLASH_GuardCleanup(status, TypeProgram);
   }
 
   /* Process Unlocked */
@@ -430,6 +433,8 @@ __weak void HAL_FLASH_OperationErrorCallback(uint32_t ReturnValue)
   */
 HAL_StatusTypeDef HAL_FLASH_Unlock(void)
 {
+  HAL_StatusTypeDef ready = FLASH_GuardReady(1U, FLASH_TIMEOUT_VALUE);
+  if (ready != HAL_OK) { return ready; }
   HAL_StatusTypeDef status = HAL_OK;
 
   if (READ_BIT(FLASH->CR, FLASH_CR_LOCK) != 0x00U)
@@ -454,6 +459,8 @@ HAL_StatusTypeDef HAL_FLASH_Unlock(void)
   */
 HAL_StatusTypeDef HAL_FLASH_Lock(void)
 {
+  HAL_StatusTypeDef ready = FLASH_GuardReady(5U, FLASH_TIMEOUT_VALUE);
+  if (ready != HAL_OK) { return ready; }
   HAL_StatusTypeDef status = HAL_ERROR;
 
   /* Set the LOCK Bit to lock the FLASH Registers access */
@@ -587,52 +594,10 @@ uint32_t HAL_FLASH_GetError(void)
   */
 HAL_StatusTypeDef FLASH_WaitForLastOperation(uint32_t Timeout)
 {
-  uint32_t error;
-  /* Wait for the FLASH operation to complete by polling on BUSY flag to be reset.
-     Even if the FLASH operation fails, the BUSY flag will be reset and an error
-     flag will be set */
-  uint32_t timeout = HAL_GetTick() + Timeout;
-
-  /* Wait if any operation is ongoing */
-#if defined(FLASH_DBANK_SUPPORT)
-  error = (FLASH_SR_BSY1 | FLASH_SR_BSY2);
-#else
-  error = FLASH_SR_BSY1;
-#endif
-
-  while ((FLASH->SR & error) != 0x00U)
-  {
-    if (HAL_GetTick() >= timeout)
-    {
-      return HAL_TIMEOUT;
-    }
-  }
-
-  /* check flash errors */
-  error = (FLASH->SR & FLASH_SR_ERRORS);
-
-  /* Clear SR register */
-  FLASH->SR = FLASH_SR_CLEAR;
-
-  if (error != 0x00U)
-  {
-    /*Save the error code*/
-    pFlash.ErrorCode = error;
-    return HAL_ERROR;
-  }
-
-  /* Wait for control register to be written */
-  timeout = HAL_GetTick() + Timeout;
-
-  while ((FLASH->SR & FLASH_SR_CFGBSY) != 0x00U)
-  {
-    if (HAL_GetTick() >= timeout)
-    {
-      return HAL_TIMEOUT;
-    }
-  }
-
-  return HAL_OK;
+  HAL_StatusTypeDef status = FLASH_GuardReady(2U, Timeout);
+  if (status == HAL_OK) { FLASH->SR = FLASH_SR_CLEAR; }
+  else { pFlash.ErrorCode = FLASH_Guard.sr & FLASH_SR_ERRORS; }
+  return status;
 }
 
 /**

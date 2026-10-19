@@ -61,11 +61,12 @@ static void flashFailure(void *user, uint32_t operation, HAL_StatusTypeDef statu
                          uint32_t page_error)
 {
     BlDiagnostics *diag = &((BlStm32Context *)user)->diagnostics;
+    (void)FLASH_GuardFailure(status);
     if (diag->value[BL_DIAG_OPERATION] == 0U) {
-        diag->value[BL_DIAG_OPERATION] = operation;
+        diag->value[BL_DIAG_OPERATION] = operation | (FLASH_Guard.stage << 16U);
         diag->value[BL_DIAG_STATUS] = status;
-        diag->value[BL_DIAG_HAL_ERROR] = HAL_FLASH_GetError();
-        diag->value[BL_DIAG_SR] = FLASH->SR;
+        diag->value[BL_DIAG_HAL_ERROR] = FLASH_Guard.sr & FLASH_SR_ERRORS;
+        diag->value[BL_DIAG_SR] = FLASH_Guard.sr;
         diag->value[BL_DIAG_ADDRESS] = address;
         diag->value[BL_DIAG_BANK] = bank;
         diag->value[BL_DIAG_PAGE] = page;
@@ -117,7 +118,7 @@ static bool flashEraseRaw(void *user, uint32_t address, uint32_t size)
         offset += span.pages * BL_ERASE_PAGE_SIZE;
         remaining -= span.pages * BL_ERASE_PAGE_SIZE;
     }
-    lock_status = HAL_FLASH_Lock();
+    lock_status = (status == HAL_OK) ? HAL_FLASH_Lock() : status;
     if (lock_status != HAL_OK) {
         flashFailure(user, 4U, lock_status, address, 0U, 0U, error);
     }
@@ -159,7 +160,7 @@ static bool flashProgramRaw(void *user, uint32_t address, const uint8_t *data, u
             break;
         }
     }
-    lock_status = HAL_FLASH_Lock();
+    lock_status = (status == HAL_OK) ? HAL_FLASH_Lock() : status;
     if (lock_status != HAL_OK) {
         flashFailure(user, 8U, lock_status, address, 0U, 0U, UINT32_MAX);
     }
@@ -345,7 +346,8 @@ static bool markPending(void *user, uint8_t slot,
 static bool activate(void *user, uint8_t slot)
 {
     BlStm32Context *context = (BlStm32Context *)user;
-    return (context != NULL) && (slot == 1U) &&
+    return (FLASH_Guard.status == HAL_OK) &&
+        (context != NULL) && (slot == 1U) &&
         (context->transaction != NULL) &&
         BlTransaction_ScheduleActivation(context->transaction);
 }
@@ -366,7 +368,7 @@ static bool jump(void *user, uint32_t vector_address)
     uint32_t stack_pointer;
     uint32_t reset_handler;
     (void)user;
-    if (vector_address != BL_SLOT_A_START) {
+    if ((FLASH_Guard.status != HAL_OK) || (vector_address != BL_SLOT_A_START)) {
         return false;
     }
     stack_pointer = *(const volatile uint32_t *)(uintptr_t)vector_address;

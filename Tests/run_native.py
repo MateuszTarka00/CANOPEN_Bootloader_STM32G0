@@ -47,6 +47,31 @@ def main() -> None:
         shutil.rmtree(output)
     output.mkdir()
     try:
+        # Compile the production HAL function bodies, not a parallel state planner.
+        hal = ROOT / "Drivers" / "STM32G0xx_HAL_Driver"
+        functions = {
+            "stm32g0xx_hal_flash.c": (
+                "HAL_FLASH_Program", "HAL_FLASH_Unlock", "HAL_FLASH_Lock",
+                "FLASH_WaitForLastOperation"),
+            "stm32g0xx_hal_flash_ex.c": ("HAL_FLASHEx_Erase",),
+        }
+        bodies = []
+        for source, names in functions.items():
+            text = (hal / "Src" / source).read_text()
+            for name in names:
+                start = text.index("HAL_StatusTypeDef " + name + "(")
+                opening = text.index("{", start)
+                depth, end = 1, opening + 1
+                while depth:
+                    depth += (text[end] == "{") - (text[end] == "}")
+                    end += 1
+                bodies.append(text[start:end])
+        (output / "flash_hal_bodies.inc").write_text("\n".join(bodies))
+        executable = output / "test_flash_guard.exe"
+        subprocess.run(flags + ["-I" + str(hal / "Inc"), "-I" + str(output),
+                               str(ROOT / "Tests" / "test_flash_guard.c"),
+                               "-o", str(executable)], check=True)
+        subprocess.run([str(executable)], check=True)
         for name in ("test_bootloader", "verify_manifest"):
             executable = output / (name + ".exe")
             subprocess.run(flags + [str(ROOT / "Tests" / (name + ".c"))]
@@ -85,6 +110,11 @@ def main() -> None:
                 app_header = app / "Core" / "Inc" / header
                 if boot_header.read_bytes() != app_header.read_bytes():
                     raise RuntimeError(f"Application/bootloader ABI header differs: {header}")
+            for relative in ("Inc/stm32g0xx_flash_guard.h", "Inc/stm32g0xx_hal_flash.h",
+                             "Src/stm32g0xx_hal_flash.c", "Src/stm32g0xx_hal_flash_ex.c"):
+                if (hal / relative).read_bytes() != (
+                        app / "Drivers" / "STM32G0xx_HAL_Driver" / relative).read_bytes():
+                    raise RuntimeError(f"Flash containment HAL differs: {relative}")
             app_sources = [app / "Tests" / "test_canopen.c"] + [
                 app / "Core" / "Src" / (name + ".c") for name in (
                     "canopen", "canopen_sdo", "canopen_nmt", "canopen_heartbeat",

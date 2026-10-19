@@ -101,7 +101,8 @@ typedef struct {
 
 static inline void BlDiagnosticStage(BootloaderInterface *bl, uint32_t stage)
 {
-    if (bl->platform.diagnostics != NULL) {
+    if ((bl->platform.diagnostics != NULL) &&
+        (bl->platform.diagnostics->value[BL_DIAG_OPERATION] == 0U)) {
         bl->platform.diagnostics->value[BL_DIAG_STAGE] = stage;
     }
 }

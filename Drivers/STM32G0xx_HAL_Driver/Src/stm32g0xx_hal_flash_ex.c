@@ -156,6 +156,8 @@ HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef *pEraseInit, uint32_t
   HAL_StatusTypeDef status;
   uint32_t index;
 
+  if (FLASH_Guard.status != HAL_OK) { return FLASH_Guard.status; }
+
   /* Check the parameters */
   assert_param(IS_FLASH_TYPEERASE(pEraseInit->TypeErase));
 
@@ -181,7 +183,7 @@ HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef *pEraseInit, uint32_t
       FLASH_MassErase(pEraseInit->Banks);
 
       /* Wait for last operation to be completed */
-      status = FLASH_WaitForLastOperation(FLASH_TIMEOUT_VALUE);
+      status = FLASH_GuardReady(3U, FLASH_TIMEOUT_VALUE);
     }
     else
     {
@@ -194,7 +196,7 @@ HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef *pEraseInit, uint32_t
         FLASH_PageErase(pEraseInit->Banks, index);
 
         /* Wait for last operation to be completed */
-        status = FLASH_WaitForLastOperation(FLASH_TIMEOUT_VALUE);
+        status = FLASH_GuardReady(3U, FLASH_TIMEOUT_VALUE);
 
         if (status != HAL_OK)
         {
@@ -205,7 +207,7 @@ HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef *pEraseInit, uint32_t
       }
 
       /* If operation is completed or interrupted, disable the Page Erase Bit */
-      CLEAR_BIT(FLASH->CR, FLASH_CR_PER);
+      status = FLASH_GuardCleanup(status, FLASH_CR_PER);
     }
   }
 

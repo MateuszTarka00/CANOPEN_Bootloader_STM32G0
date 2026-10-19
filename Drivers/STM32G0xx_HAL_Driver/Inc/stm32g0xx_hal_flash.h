@@ -1016,6 +1016,8 @@ HAL_StatusTypeDef  FLASH_WaitForLastOperation(uint32_t Timeout);
   * @}
   */
 
+#include "stm32g0xx_flash_guard.h"
+
 #ifdef __cplusplus
 }
 #endif
