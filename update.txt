@@ -1,50 +1,90 @@
-18.10.2026/18:16:02.566[TX-----] Node    1, ▸ RSDO initiate upload 0x1008:0x00
-18.10.2026/18:16:02.574[RX52151] Node    1, ▸ TSDO response upload 0x1008:0x00 number of bytes 18
-18.10.2026/18:16:02.592[TX-----] Node    1, ▸ RSDO request upload segment, toggle bit 0
-18.10.2026/18:16:02.599[RX52177] Node    1, ▸ TSDO response upload toggle bit 0, number of bytes 7, complete flag 0, 43 41 4E 6F 70 65 6E
-18.10.2026/18:16:02.610[TX-----] Node    1, ▸ RSDO request upload segment, toggle bit 1
-18.10.2026/18:16:02.617[RX52195] Node    1, ▸ TSDO response upload toggle bit 1, number of bytes 7, complete flag 0, 20 42 6F 6F 74 6C 6F
-18.10.2026/18:16:02.623[TX-----] Node    1, ▸ RSDO request upload segment, toggle bit 0
-18.10.2026/18:16:02.631[RX52207] Node    1, ▸ TSDO response upload toggle bit 0, number of bytes 4, complete flag 1, 61 64 65 72
-18.10.2026/18:16:02.667[TX-----] Node    1, ▸ RSDO initiate upload 0x1009:0x00
-18.10.2026/18:16:02.674[RX52251] Node    1, ▸ TSDO response upload 0x1009:0x00 3-bytes (24 bits) 0x302E31 (3157553)
-18.10.2026/18:16:02.696[TX-----] Node    1, ▸ RSDO initiate upload 0x100A:0x00
-18.10.2026/18:16:02.704[RX52281] Node    1, ▸ TSDO response upload 0x100A:0x00 number of bytes 5
-18.10.2026/18:16:02.707[TX-----] Node    1, ▸ RSDO request upload segment, toggle bit 0
-18.10.2026/18:16:02.711[RX52291] Node    1, ▸ TSDO response upload toggle bit 0, number of bytes 5, complete flag 1, 31 2E 30 2E 30
-18.10.2026/18:16:02.760[TX-----] Node    1, ▸ RSDO initiate upload 0x1018:0x01
-18.10.2026/18:16:02.765[RX52345] Node    1, ▸ TSDO response upload 0x1018:0x01 4-bytes (32 bits) 0x00000067 (103)
-18.10.2026/18:16:02.812[TX-----] Node    1, ▸ RSDO initiate upload 0x1018:0x02
-18.10.2026/18:16:02.818[RX52397] Node    1, ▸ TSDO response upload 0x1018:0x02 4-bytes (32 bits) 0x00000001 (1)
-18.10.2026/18:16:02.844[TX-----] Node    1, ▸ RSDO initiate upload 0x1018:0x03
-18.10.2026/18:16:02.853[RX52429] Node    1, ▸ TSDO response upload 0x1018:0x03 4-bytes (32 bits) 0x00010000 (65536)
-18.10.2026/18:16:02.889[TX-----] Node    1, ▸ RSDO initiate upload 0x1018:0x04
-18.10.2026/18:16:02.896[RX52473] Node    1, ▸ TSDO response upload 0x1018:0x04 4-bytes (32 bits) 0x00000001 (1)
-18.10.2026/18:16:12.548[TX-----] Node    1, ▸ RSDO initiate upload 0x1008:0x00
-18.10.2026/18:16:12.556[RX62132] Node    1, ▸ TSDO response upload 0x1008:0x00 number of bytes 18
-18.10.2026/18:16:12.585[TX-----] Node    1, ▸ RSDO request upload segment, toggle bit 0
-18.10.2026/18:16:12.592[RX62170] Node    1, ▸ TSDO response upload toggle bit 0, number of bytes 7, complete flag 0, 43 41 4E 6F 70 65 6E
-18.10.2026/18:16:12.604[TX-----] Node    1, ▸ RSDO request upload segment, toggle bit 1
-18.10.2026/18:16:12.610[RX62188] Node    1, ▸ TSDO response upload toggle bit 1, number of bytes 7, complete flag 0, 20 42 6F 6F 74 6C 6F
-18.10.2026/18:16:12.610[TX-----] Node    1, ▸ RSDO request upload segment, toggle bit 0
-18.10.2026/18:16:12.617[RX62194] Node    1, ▸ TSDO response upload toggle bit 0, number of bytes 4, complete flag 1, 61 64 65 72
-18.10.2026/18:16:12.657[TX-----] Node    1, ▸ RSDO initiate upload 0x1009:0x00
-18.10.2026/18:16:12.665[RX62242] Node    1, ▸ TSDO response upload 0x1009:0x00 3-bytes (24 bits) 0x302E31 (3157553)
-18.10.2026/18:16:12.704[TX-----] Node    1, ▸ RSDO initiate upload 0x100A:0x00
-18.10.2026/18:16:12.710[RX62288] Node    1, ▸ TSDO response upload 0x100A:0x00 number of bytes 5
-18.10.2026/18:16:12.728[TX-----] Node    1, ▸ RSDO request upload segment, toggle bit 0
-18.10.2026/18:16:12.735[RX62312] Node    1, ▸ TSDO response upload toggle bit 0, number of bytes 5, complete flag 1, 31 2E 30 2E 30
-18.10.2026/18:16:12.774[TX-----] Node    1, ▸ RSDO initiate upload 0x1018:0x01
-18.10.2026/18:16:12.778[RX62358] Node    1, ▸ TSDO response upload 0x1018:0x01 4-bytes (32 bits) 0x00000067 (103)
-18.10.2026/18:16:12.816[TX-----] Node    1, ▸ RSDO initiate upload 0x1018:0x02
-18.10.2026/18:16:12.820[RX62400] Node    1, ▸ TSDO response upload 0x1018:0x02 4-bytes (32 bits) 0x00000001 (1)
-18.10.2026/18:16:12.861[TX-----] Node    1, ▸ RSDO initiate upload 0x1018:0x03
-18.10.2026/18:16:12.869[RX62446] Node    1, ▸ TSDO response upload 0x1018:0x03 4-bytes (32 bits) 0x00010000 (65536)
-18.10.2026/18:16:12.904[TX-----] Node    1, ▸ RSDO initiate upload 0x1018:0x04
-18.10.2026/18:16:12.912[RX62488] Node    1, ▸ TSDO response upload 0x1018:0x04 4-bytes (32 bits) 0x00000001 (1)
-18.10.2026/18:16:18.082[TX-----] NMT-Command 'Reset Node' for node 1
-18.10.2026/18:16:18.093[RX67668] Node    1, EMCY 0x5001 -> register=0x01, data=0x47 0x41 0x4D 0x49 0x00
-18.10.2026/18:16:21.343[TX-----] Node  126, ▸ RSDO initiate upload 0x1000:0x00
-18.10.2026/18:16:22.343[TX-----] Node  126, ▸ RSDO abort 0x1000:0x00 code 0x05040000 'SDO protocol time out.'
-18.10.2026/18:16:22.368[TX-----] Node  126, ▸ RSDO initiate upload 0x1000:0x00
-18.10.2026/18:16:23.369[TX-----] Node  126, ▸ RSDO abort 0x1000:0x00 code 0x05040000 'SDO protocol time out.'
+18.10.2026/21:17:52.073[TX-----] Node  126, ▸ RSDO initiate upload 0x1008:0x00
+18.10.2026/21:17:52.078[RX61699] Node  126, ▸ TSDO response upload 0x1008:0x00 number of bytes 18
+18.10.2026/21:17:52.096[TX-----] Node  126, ▸ RSDO request upload segment, toggle bit 0
+18.10.2026/21:17:52.102[RX61723] Node  126, ▸ TSDO response upload toggle bit 0, number of bytes 7, complete flag 0, 43 41 4E 6F 70 65 6E
+18.10.2026/21:17:52.105[TX-----] Node  126, ▸ RSDO request upload segment, toggle bit 1
+18.10.2026/21:17:52.114[RX61731] Node  126, ▸ TSDO response upload toggle bit 1, number of bytes 7, complete flag 0, 20 42 6F 6F 74 6C 6F
+18.10.2026/21:17:52.125[TX-----] Node  126, ▸ RSDO request upload segment, toggle bit 0
+18.10.2026/21:17:52.134[RX61751] Node  126, ▸ TSDO response upload toggle bit 0, number of bytes 4, complete flag 1, 61 64 65 72
+18.10.2026/21:17:52.160[TX-----] Node  126, ▸ RSDO initiate upload 0x1009:0x00
+18.10.2026/21:17:52.170[RX61787] Node  126, ▸ TSDO response upload 0x1009:0x00 3-bytes (24 bits) 0x302E31 (3157553)
+18.10.2026/21:17:52.212[TX-----] Node  126, ▸ RSDO initiate upload 0x100A:0x00
+18.10.2026/21:17:52.219[RX61837] Node  126, ▸ TSDO response upload 0x100A:0x00 number of bytes 5
+18.10.2026/21:17:52.238[TX-----] Node  126, ▸ RSDO request upload segment, toggle bit 0
+18.10.2026/21:17:52.245[RX61865] Node  126, ▸ TSDO response upload toggle bit 0, number of bytes 5, complete flag 1, 31 2E 30 2E 30
+18.10.2026/21:17:52.294[TX-----] Node  126, ▸ RSDO initiate upload 0x1018:0x01
+18.10.2026/21:17:52.299[RX61919] Node  126, ▸ TSDO response upload 0x1018:0x01 4-bytes (32 bits) 0x00000067 (103)
+18.10.2026/21:17:52.330[TX-----] Node  126, ▸ RSDO initiate upload 0x1018:0x02
+18.10.2026/21:17:52.335[RX61957] Node  126, ▸ TSDO response upload 0x1018:0x02 4-bytes (32 bits) 0x00000001 (1)
+18.10.2026/21:17:52.373[TX-----] Node  126, ▸ RSDO initiate upload 0x1018:0x03
+18.10.2026/21:17:52.377[RX61999] Node  126, ▸ TSDO response upload 0x1018:0x03 4-bytes (32 bits) 0x00010000 (65536)
+18.10.2026/21:17:52.419[TX-----] Node  126, ▸ RSDO initiate upload 0x1018:0x04
+18.10.2026/21:17:52.426[RX62045] Node  126, ▸ TSDO response upload 0x1018:0x04 4-bytes (32 bits) 0x00000001 (1)
+18.10.2026/21:19:19.126[TX-----] Node  126, ▸ RSDO initiate upload 0x1008:0x00
+18.10.2026/21:19:19.133[RX48752] Node  126, ▸ TSDO response upload 0x1008:0x00 number of bytes 18
+18.10.2026/21:19:19.151[TX-----] Node  126, ▸ RSDO request upload segment, toggle bit 0
+18.10.2026/21:19:19.158[RX48778] Node  126, ▸ TSDO response upload toggle bit 0, number of bytes 7, complete flag 0, 43 41 4E 6F 70 65 6E
+18.10.2026/21:19:19.173[TX-----] Node  126, ▸ RSDO request upload segment, toggle bit 1
+18.10.2026/21:19:19.182[RX48800] Node  126, ▸ TSDO response upload toggle bit 1, number of bytes 7, complete flag 0, 20 42 6F 6F 74 6C 6F
+18.10.2026/21:19:19.195[TX-----] Node  126, ▸ RSDO request upload segment, toggle bit 0
+18.10.2026/21:19:19.201[RX48822] Node  126, ▸ TSDO response upload toggle bit 0, number of bytes 4, complete flag 1, 61 64 65 72
+18.10.2026/21:19:19.238[TX-----] Node  126, ▸ RSDO initiate upload 0x1009:0x00
+18.10.2026/21:19:19.244[RX48864] Node  126, ▸ TSDO response upload 0x1009:0x00 3-bytes (24 bits) 0x302E31 (3157553)
+18.10.2026/21:19:19.277[TX-----] Node  126, ▸ RSDO initiate upload 0x100A:0x00
+18.10.2026/21:19:19.281[RX48904] Node  126, ▸ TSDO response upload 0x100A:0x00 number of bytes 5
+18.10.2026/21:19:19.297[TX-----] Node  126, ▸ RSDO request upload segment, toggle bit 0
+18.10.2026/21:19:19.306[RX48924] Node  126, ▸ TSDO response upload toggle bit 0, number of bytes 5, complete flag 1, 31 2E 30 2E 30
+18.10.2026/21:19:19.345[TX-----] Node  126, ▸ RSDO initiate upload 0x1018:0x01
+18.10.2026/21:19:19.355[RX48972] Node  126, ▸ TSDO response upload 0x1018:0x01 4-bytes (32 bits) 0x00000067 (103)
+18.10.2026/21:19:19.397[TX-----] Node  126, ▸ RSDO initiate upload 0x1018:0x02
+18.10.2026/21:19:19.404[RX49024] Node  126, ▸ TSDO response upload 0x1018:0x02 4-bytes (32 bits) 0x00000001 (1)
+18.10.2026/21:19:19.456[TX-----] Node  126, ▸ RSDO initiate upload 0x1018:0x03
+18.10.2026/21:19:19.465[RX49082] Node  126, ▸ TSDO response upload 0x1018:0x03 4-bytes (32 bits) 0x00010000 (65536)
+18.10.2026/21:19:19.508[TX-----] Node  126, ▸ RSDO initiate upload 0x1018:0x04
+18.10.2026/21:19:19.514[RX49134] Node  126, ▸ TSDO response upload 0x1018:0x04 4-bytes (32 bits) 0x00000001 (1)
+18.10.2026/21:19:23.303[TX-----] Node  126, ▸ RSDO initiate block download 0x1F50:0x01, 28708 bytes, CRC is supported
+18.10.2026/21:19:23.311[RX52930] Node  126, ▸ TSDO response init block download 0x1F50:0x01, block size 1, CRC supported
+18.10.2026/21:19:23.311[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 56 47 42 31 01 00 98
+18.10.2026/21:19:23.315[RX52938] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.315[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 00 8C 6F 00 00 0A DA
+18.10.2026/21:19:23.324[RX52942] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.324[TX-----] Node  126, ▸ RSDO download block segment sequence 1, E8 1F 00 01 00 00 67
+18.10.2026/21:19:23.332[RX52950] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.332[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 00 00 00 01 00 00 00
+18.10.2026/21:19:23.339[RX52958] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.339[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 01 00 00 00 01 00 00
+18.10.2026/21:19:23.346[RX52966] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.346[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 00 01 00 00 00 5B 9E
+18.10.2026/21:19:23.353[RX52972] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.353[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 07 BD A1 26 B1 C6 9C
+18.10.2026/21:19:23.360[RX52980] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.360[TX-----] Node  126, ▸ RSDO download block segment sequence 1, E3 BD C1 F9 7E E4 02
+18.10.2026/21:19:23.367[RX52986] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.367[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 86 7E DA 0E 69 60 39
+18.10.2026/21:19:23.374[RX52994] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.374[TX-----] Node  126, ▸ RSDO download block segment sequence 1, FA C5 D7 73 D7 6D 35
+18.10.2026/21:19:23.381[RX53000] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.381[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 85 E6 01 40 00 00 E3
+18.10.2026/21:19:23.388[RX53008] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.388[TX-----] Node  126, ▸ RSDO download block segment sequence 1, EF AA 4C 64 A4 80 95
+18.10.2026/21:19:23.395[RX53014] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.401[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 04 F0 86 AA 28 AC 81
+18.10.2026/21:19:23.407[RX53028] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.407[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 7E CE DB D7 5E 2F 8A
+18.10.2026/21:19:23.414[RX53034] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.414[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 6A 3E 8C D7 B0 7F 3E
+18.10.2026/21:19:23.421[RX53040] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.421[TX-----] Node  126, ▸ RSDO download block segment sequence 1, CF 42 B1 2A 54 A7 6C
+18.10.2026/21:19:23.428[RX53046] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.428[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 12 BE 23 5E D0 BC 4D
+18.10.2026/21:19:23.434[RX53054] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.434[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 45 3B E8 EB 76 65 8D
+18.10.2026/21:19:23.441[RX53060] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.441[TX-----] Node  126, ▸ RSDO download block segment sequence 1, DA B9 FE B9 57 D9 68
+18.10.2026/21:19:23.448[RX53068] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.448[TX-----] Node  126, ▸ RSDO download block segment sequence 1, AB 3F E4 30 11 FA 06
+18.10.2026/21:19:23.455[RX53074] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.455[TX-----] Node  126, ▸ RSDO download block segment sequence 1, F6 74 0C 4E 42 43 4D
+18.10.2026/21:19:23.462[RX53080] Node  126, ▸ TSDO response block download, sequence 1, block size 1
+18.10.2026/21:19:23.462[TX-----] Node  126, ▸ RSDO download block segment sequence 1, 54 BD BC B2 AB 00 40
+18.10.2026/21:19:23.879[RX53500] Node  126, ▸ TSDO abort 0x1F50:0x01 code 0x06060000 'Access failed due to a hardware error.'

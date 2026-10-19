@@ -54,6 +54,7 @@ FirmwareUpdateResult FirmwareUpdate_Begin(FirmwareUpdate *update,
     update->buffered = 0U;
     update->stream_crc = UINT32_MAX;
     update->target_slot = (uint8_t)(update->bootloader->active_slot ^ 1U);
+    BlDiagnosticStage(update->bootloader, 4U);
     if (!BootloaderInterface_ValidateFirmware(update->bootloader,
                                                update->target_slot, manifest)) {
         update->state = FWU_FAILED;
@@ -71,6 +72,7 @@ FirmwareUpdateResult FirmwareUpdate_Begin(FirmwareUpdate *update,
         update->bootloader->platform.get_time_ms(
             update->bootloader->platform.user) : now;
     update->state = FWU_RECEIVING;
+    BlDiagnosticStage(update->bootloader, 7U);
     return FWU_RESULT_NONE;
 }
 
@@ -86,6 +88,7 @@ FirmwareUpdateResult FirmwareUpdate_Write(FirmwareUpdate *update,
     if ((update->state != FWU_RECEIVING) || (update->bootloader == NULL)) {
         return FWU_RESULT_INVALID_STATE;
     }
+    BlDiagnosticStage(update->bootloader, 8U);
     if ((now - update->last_activity) >= update->timeout_ms) {
         return failUpdate(update, FWU_RESULT_TIMEOUT);
     }
@@ -126,6 +129,7 @@ FirmwareUpdateResult FirmwareUpdate_Finish(FirmwareUpdate *update, uint32_t now)
     if (update->state != FWU_RECEIVING) {
         return FWU_RESULT_INVALID_STATE;
     }
+    BlDiagnosticStage(update->bootloader, 9U);
     if ((now - update->last_activity) >= update->timeout_ms) {
         return failUpdate(update, FWU_RESULT_TIMEOUT);
     }
@@ -183,6 +187,7 @@ FirmwareUpdateResult FirmwareUpdate_Finish(FirmwareUpdate *update, uint32_t now)
     update->last_activity = now;
     update->state = FWU_PENDING;
     update->result = FWU_RESULT_NONE;
+    BlDiagnosticStage(update->bootloader, 10U);
     return FWU_RESULT_NONE;
 }
 

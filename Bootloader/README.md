@@ -78,11 +78,91 @@ stream invokes the existing cancellation path and cannot activate an image.
 Block upload and size-unspecified block download are not supported. The
 small block size trades throughput for bounded memory and RX servicing.
 
-Next bench step: reflash only the new bootloader at `0x08000000`, preserving
-factory identity and journal. Reset and capture the wizard traffic: it should
-now receive its Node-126 `0x1000` reply (currently device type 0). Capture
-subsequent requests or rejection; do not guess a device type to bypass checks.
-The file parser, unlock/control sequence and activation still require evidence.
+### Diagnosing the 2026-10-18 21:19 transfer failure (build 1.0.1)
+
+The latest `update.txt` proves a declared 28,708-byte download, 147 bytes
+acknowledged, then failure on the 22nd seven-byte segment after 417 ms.
+That segment finishes the existing 152-byte `VGB1` manifest and contains the
+first two image bytes. ACKs for the prefix do **not** prove authentication.
+The boundary runs manifest decoding/length checks, authentication, the
+RECEIVING journal commit, `FirmwareUpdate_Begin`, its validation and
+`BootloaderInterface_PrepareFirmware` validation/slot erase. Two image bytes
+only enter the eight-byte programming buffer: image programming and pending
+manifest commit cannot yet be the failing operations.
+
+`0x06060000` alone does not identify which of the above failed. In particular,
+a failed journal erase/program before slot preparation also produces it.
+Neither bad bank addressing nor a timeout is established by the trace.
+The current HAL adapter already splits bank-local page numbers using the
+HAL's runtime bank count; Slot B is bank 2 page 7 in dual-bank mode, or
+bank 1 page 71 in single-bank mode. Slot A crossing a bank boundary is also
+split. Preparation already refreshes the firmware/SDO clocks after its
+synchronous work; the container refreshes the timestamp again before writing
+its first image bytes. Native tests cover a 1,500-ms erase, including tick wrap.
+Do not change option bytes, erase protections, signatures or the image format
+based on the 417-ms delay alone.
+
+`LiftAppToolbox_format_BIN_dla_AI.md` explicitly calls `FWUP`/64 bytes a
+hypothesis, not a verified format. This build does **not** add it or accept
+unsigned raw images. Existing signed containers, the vendor path, A/B recovery
+and Ed25519 remain in use.
+
+Build 1.0.1 adds volatile, read-only diagnostic record **`0x2010`** on Node 126.
+Read `0x2010:00` as U8 (14 entries); all other subindices below are U32,
+little-endian. Diagnostics reset at the next accepted container initiation or
+vendor begin, and at MCU reset. SDO abort cleanup and diagnostic reads do not
+clear the stage or the first Flash-failure snapshot. Save them **before**
+resetting, starting another download or sending another update command.
+
+| Address | Meaning |
+|---|---|
+| `0x2010:01` | Last entered stage (table below) |
+| `0x2010:02` | RECEIVING `Ps_Save` result: 0 OK, 1 EMPTY, 2 CORRUPT, 3 IO_ERROR, 4 INVALID; zero also means not attempted before stage 3 |
+| `0x2010:03` | First Flash failure operation: 0 none, 1 erase preflight, 2 erase unlock, 3 HAL erase, 4 erase lock, 5 program preflight, 6 program unlock, 7 HAL program, 8 program lock, 9 program readback |
+| `0x2010:04` | HAL status at that failure: 0 OK, 1 ERROR, 2 BUSY, 3 TIMEOUT |
+| `0x2010:05` | `HAL_FLASH_GetError()` captured before cleanup/next HAL call |
+| `0x2010:06` | `FLASH->SR` after the failing call (HAL may already have cleared error flags) |
+| `0x2010:07` | Operation address; for erase, start of the failing bank span |
+| `0x2010:08` | HAL erase bank mask (1 or 2); zero when not applicable |
+| `0x2010:09` | HAL erase starting page within that bank |
+| `0x2010:0A` | HAL `PageError`, the actual failing bank-local page, or `0xFFFFFFFF` if not supplied |
+| `0x2010:0B` | `FLASH->OPTR` at first failure |
+| `0x2010:0C` | HAL runtime `FLASH_BANK_NB` at first failure |
+| `0x2010:0D` | Current firmware result: notably 4 ERASE_FAILED, 6 WRITE_FAILED, 7 TIMEOUT, 11 PENDING_FAILED, 12 CANCELLED |
+| `0x2010:0E` | Number of image bytes accepted (excludes the manifest) |
+
+Stages: **0** none; **1** decode/container length; **2** initial authentication;
+**3** RECEIVING journal save; **4** Begin validation; **5** Prepare validation;
+**6** slot erase; **7** ready to receive; **8** image buffer/program;
+**9** finish/readback/pending commit; **10** verified/pending success.
+A failed stage remains entered, not completed. For example, stage 3 plus
+PS_IO_ERROR isolates the journal, while stage 6 plus operation 3 isolates
+slot HAL erase. Stage 5 plus result 4 and no Flash failure means Prepare
+rejected before calling erase; result 4 alone is not proof of HAL erase failure.
+
+Bench procedure:
+
+1. Back up Flash. Program only `Debug\CANOPEN_Bootloader_STM32G0.bin` or
+   `Release\CANOPEN_Bootloader_STM32G0.bin` (36,864 bytes) at `0x08000000`
+   using SWD, **without mass erase**; preserve application, factory and NVM.
+2. Enter service mode as before. Read Node 126 `0x100A:00` = `1.0.1`,
+   `0x200D:00` = `0x00010001`, and `0x2010:00` = 14 to verify this image.
+3. Retry the **same signed 28,708-byte file**, capturing full CAN traffic.
+   If it aborts, do not reset/retry yet: read every `0x2010:01..0E` and
+   `0x2007:00`, saving the raw values alongside the trace.
+4. For manual raw CAN, send eight bytes `40 10 20 ss 00 00 00 00` on
+   `0x67E` (`ss` = `01` through `0E`); expect `43 10 20 ss vv vv vv vv`
+   on `0x5FE`. Subindex 00 uses response command `4F`, U8 value `0E`.
+5. Interpret the failing address as journal (`0x0803F000`/`0x0803F800`) or
+   Slot B (`0x08023800` onward). HAL error bit `0x10` is WRP, `0x08`
+   PROG, `0x20` PGA, `0x40` SIZ, `0x80` PGS; retain the complete mask.
+   OPTR `0x00100000` is nSWAP_BANK and `0x00200000` DUAL_BANK, but use
+   the captured HAL bank count, which also depends on the device sales type.
+   Do not automatically clear error flags/change option bytes to hide a failure.
+
+No new `0x1F51`, password or activation metadata is defined. Wizard activation
+and full interoperability still require evidence. These diagnostics identify
+the actual failing path; they are not a claim that the physical fault is fixed.
 
 ## Flash map
 
@@ -213,9 +293,9 @@ These tests do not replace target link-size,
 FDCAN, flash-bank, power-cut, signature interoperability, LiftAppTool, or
 CiA conformance testing.
 
-The enabled Debug/Release verifier and LTO image contain 34,400 bytes of text,
-84 bytes of initialized data and 5,716 bytes of BSS. The load image leaves
-2,376 bytes before the fixed discovery record at `0x08008FE0`. The record contains
+The diagnostic 1.0.1 Debug/Release verifier and LTO image contain 36,144 bytes of
+text, 84 bytes of initialized data and 5,940 bytes of BSS. The load image leaves
+632 bytes before the fixed discovery record at `0x08008FE0`. The record contains
 the protocol, layout and signing gate and is checked by the application.
 The linker asserts that the load image cannot overlap this record or either
 application slot. The exported bootloader BIN spans exactly 36 KiB including

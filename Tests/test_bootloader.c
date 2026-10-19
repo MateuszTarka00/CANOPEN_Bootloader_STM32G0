@@ -72,6 +72,7 @@ static void testPersistentUpdateStateValidation(void)
 }
 
 typedef struct {
+    BlDiagnostics diagnostics;
     uint8_t bytes[TEST_FLASH_SIZE];
     uint32_t erase_count;
     uint32_t program_count;
@@ -297,6 +298,7 @@ static BlPlatform makePlatform(FakeFlash *flash)
     BlPlatform platform;
     memset(&platform, 0, sizeof(platform));
     platform.user = flash;
+    platform.diagnostics = &flash->diagnostics;
     platform.read = fakeRead;
     platform.erase = fakeErase;
     platform.program = fakeProgram;
@@ -1083,6 +1085,98 @@ static void testSignedContainerDownloads(void)
     puts("Signed 1F50 container: segmented/block, small images, validation-before-erase, CRC, cancel and timeout recovery OK");
 }
 
+static bool failingNvmWrite(void *user, uint8_t page, uint32_t offset,
+                            const uint8_t *data, uint32_t size)
+{
+    (void)user; (void)page; (void)offset; (void)data; (void)size;
+    return false;
+}
+
+static uint32_t readDiagnostic(CoSdo *sdo, uint8_t subindex)
+{
+    CoFrame request = {0}, reply;
+    request.id = 0x67EU;
+    request.length = 8U;
+    request.data[0] = 0x40U;
+    Co_Put16(&request.data[1], 0x2010U);
+    request.data[3] = subindex;
+    assert(CoSdo_Receive(sdo, &request, 0U, &reply));
+    assert(reply.data[0] == ((subindex == 0U) ? 0x4FU : 0x43U));
+    return (subindex == 0U) ? reply.data[4] : Co_Get32(&reply.data[4]);
+}
+
+static void testContainerFailureDiagnostics(void)
+{
+    FakeFlash flash;
+    FakeNvm nvm;
+    PsStore store;
+    PsData persistent;
+    BootloaderInterface bootloader;
+    FirmwareUpdate update;
+    FiData factory;
+    BootOd od;
+    CoSdo sdo;
+    uint8_t image[28556];
+    uint8_t container[BL_MANIFEST_RECORD_SIZE + sizeof(image)];
+    uint8_t record[BL_MANIFEST_RECORD_SIZE];
+    BlImageManifest manifest;
+    uint32_t mode;
+    memset(image, 0x5AU, sizeof(image));
+    makeContainer(image, sizeof(image), &manifest, record, container);
+    for (mode = 0U; mode < 3U; ++mode) {
+        initContainerFixture(&flash, &nvm, &store, &persistent, &bootloader,
+                             &update, &factory, &od, &sdo);
+        {
+            BlLayout layout = makeLayout();
+            BlPlatform platform = makePlatform(&flash);
+            layout.bootloader.size = DEVICE_BOOT_SIZE;
+            layout.slot[0].address = DEVICE_SLOT_A_START;
+            layout.slot[1].address = DEVICE_SLOT_B_START;
+            layout.slot[0].size = DEVICE_SLOT_SIZE;
+            layout.slot[1].size = DEVICE_SLOT_SIZE;
+            layout.scratch.address = DEVICE_SCRATCH_START;
+            layout.factory.address = DEVICE_FACTORY_START;
+            layout.journal.address = DEVICE_NVM_START;
+            assert(BootloaderInterface_Init(&bootloader, &layout, &platform,
+                                            &factory, 0U, BL_NO_SLOT, BL_NO_SLOT));
+        }
+        if (mode == 0U) {
+            store.io.write = failingNvmWrite;
+        } else if (mode == 1U) {
+            flash.fail_erase = true;
+        } else {
+            flash.now_ms = UINT32_MAX - 200U;
+            flash.erase_advance_ms = 1500U;
+        }
+        assert(sendContainerBlock(&sdo, container, sizeof(container), false) ==
+               ((mode == 2U) ? 0U : CO_ABORT_HARDWARE));
+        assert(readDiagnostic(&sdo, 0U) == 14U);
+        assert(readDiagnostic(&sdo, 1U) == ((mode == 0U) ? 3U :
+                                         ((mode == 1U) ? 6U : 10U)));
+        assert(readDiagnostic(&sdo, 2U) == ((mode == 0U) ? PS_IO_ERROR : PS_OK));
+        assert(readDiagnostic(&sdo, 13U) ==
+               ((mode == 1U) ? FWU_RESULT_ERASE_FAILED : FWU_RESULT_NONE));
+        assert(readDiagnostic(&sdo, 14U) == ((mode == 2U) ? sizeof(image) : 0U));
+        assert(flash.pending_count == ((mode == 2U) ? 1U : 0U));
+        assert(flash.activate_count == 0U);
+        assert(BootOd_CheckDownload(&od, 0x2010U, 1U, 4U, true) ==
+               CO_ABORT_READ_ONLY);
+        {
+            uint8_t bytes[4];
+            uint32_t size;
+            assert(BootOd_Read(&od, 0x2010U, 15U, bytes, &size) ==
+                   CO_ABORT_SUBINDEX);
+        }
+        if (mode == 1U) {
+            flash.fail_erase = false;
+            assert(sendContainerBlock(&sdo, container, sizeof(container), false) == 0U);
+            assert(readDiagnostic(&sdo, 1U) == 10U);
+            assert(readDiagnostic(&sdo, 13U) == FWU_RESULT_NONE);
+        }
+    }
+    puts("28708-byte container: NVM/erase failure diagnostics survive abort; retry and slow erase across tick wrap OK");
+}
+
 typedef struct {
     uint8_t data[DEVICE_IMAGE_MAX];
     uint32_t written;
@@ -1284,6 +1378,7 @@ int main(void)
     testObjectDictionaryAndSdo(64U);
     testObjectDictionaryAndSdo(256U);
     testSignedContainerDownloads();
+    testContainerFailureDiagnostics();
     testBlockDownload();
     puts("All portable bootloader tests passed.");
     return 0;

@@ -11,6 +11,7 @@
 #include "stm32g0xx_hal.h"
 
 typedef struct {
+    BlDiagnostics diagnostics;
     PsStore store;
     PsData persistent;
     FiData factory;

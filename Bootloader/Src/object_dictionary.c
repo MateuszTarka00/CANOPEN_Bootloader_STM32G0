@@ -9,7 +9,7 @@
 #define BOOT_PROFILE_VERSION 1U
 #define BOOT_HANDOFF_VERSION 2U
 #define BOOT_EXECUTION_MODE 1U
-#define BOOT_SOFTWARE_VERSION UINT32_C(0x00010000)
+#define BOOT_SOFTWARE_VERSION UINT32_C(0x00010001)
 #define BOOT_HEARTBEAT_DEFAULT 1000U
 
 static uint32_t writeNumber(uint8_t *data, uint32_t *size, uint32_t value,
@@ -138,7 +138,7 @@ uint32_t BootOd_Read(void *user, uint16_t index, uint8_t subindex,
         text = "1.0";
         break;
     case 0x100AU:
-        text = "1.0.0";
+        text = "1.0.1";
         break;
     case 0x1014U:
         value = 0x80U + od->node_id;
@@ -232,6 +232,21 @@ uint32_t BootOd_Read(void *user, uint16_t index, uint8_t subindex,
     case 0x200FU:
         value = BL_SLOT_IMAGE_MAX;
         break;
+    case 0x2010U:
+        if (subindex == 0U) {
+            return writeNumber(data, size, BL_DIAG_COUNT + 2U, 1U);
+        }
+        if (subindex <= BL_DIAG_COUNT) {
+            value = (od->bootloader->platform.diagnostics != NULL) ?
+                od->bootloader->platform.diagnostics->value[subindex - 1U] : 0U;
+        } else if (subindex == BL_DIAG_COUNT + 1U) {
+            value = (uint32_t)od->update->result;
+        } else if (subindex == BL_DIAG_COUNT + 2U) {
+            value = od->update->received;
+        } else {
+            return CO_ABORT_SUBINDEX;
+        }
+        return writeNumber(data, size, value, 4U);
     default:
         return (index == 0x2000U || index == 0x2002U) ?
             CO_ABORT_WRITE_ONLY : CO_ABORT_NOT_FOUND;
@@ -274,6 +289,10 @@ uint32_t BootOd_CheckDownload(void *user, uint16_t index, uint8_t subindex,
             return CO_ABORT_STATE;
         }
         return 0U;
+    }
+    if (index == 0x2010U) {
+        return (subindex <= BL_DIAG_COUNT + 2U) ?
+            CO_ABORT_READ_ONLY : CO_ABORT_SUBINDEX;
     }
     if (subindex != 0U) {
         return CO_ABORT_SUBINDEX;
@@ -396,14 +415,26 @@ uint32_t BootOd_Write(void *user, uint16_t index, uint8_t subindex,
              (od->persistent->update_state == BL_TX_RECEIVING)) &&
             od->factory_valid && od->update_auth_available) {
             PsData candidate = *od->persistent;
+            if (od->bootloader->platform.diagnostics != NULL) {
+                memset(od->bootloader->platform.diagnostics, 0, sizeof(BlDiagnostics));
+            }
+            od->update->result = FWU_RESULT_NONE;
+            od->update->received = 0U;
+            BlDiagnosticStage(od->bootloader, 3U);
             candidate.update_state = BL_TX_RECEIVING;
             candidate.pending_slot = 1U;
             candidate.pending_version = od->manifest.version;
             candidate.firmware_size = od->manifest.image_size;
             candidate.firmware_crc = od->manifest.image_crc;
             candidate.update_result = 0U;
-            if (Ps_Save(od->store, &candidate) != PS_OK) {
-                return CO_ABORT_HARDWARE;
+            {
+                PsResult saved = Ps_Save(od->store, &candidate);
+                if (od->bootloader->platform.diagnostics != NULL) {
+                    od->bootloader->platform.diagnostics->value[BL_DIAG_STORAGE] = saved;
+                }
+                if (saved != PS_OK) {
+                    return CO_ABORT_HARDWARE;
+                }
             }
             *od->persistent = candidate;
             switch (FirmwareUpdate_Begin(od->update, &od->manifest, now)) {
@@ -473,6 +504,11 @@ uint32_t BootOd_StreamBegin(void *user, uint16_t index, uint8_t subindex,
         return abort_code;
     }
     if ((index == 0x1F50U) && (subindex == 1U)) {
+        if (od->bootloader->platform.diagnostics != NULL) {
+            memset(od->bootloader->platform.diagnostics, 0, sizeof(BlDiagnostics));
+        }
+        od->update->result = FWU_RESULT_NONE;
+        od->update->received = 0U;
         od->container_size = size;
         od->container_received = 0U;
         od->container_active = true;
@@ -508,6 +544,7 @@ uint32_t BootOd_StreamWrite(void *user, uint16_t index, uint8_t subindex,
             if ((od->container_received + header_count) ==
                 BL_MANIFEST_RECORD_SIZE) {
                 uint32_t expected_size;
+                BlDiagnosticStage(od->bootloader, 1U);
                 if (!BlManifest_Decode(od->container_manifest,
                                        BL_MANIFEST_RECORD_SIZE, &manifest) ||
                     (manifest.image_size > BL_SLOT_IMAGE_MAX)) {
@@ -517,6 +554,7 @@ uint32_t BootOd_StreamWrite(void *user, uint16_t index, uint8_t subindex,
                 if (expected_size != od->container_size) {
                     return CO_ABORT_LENGTH;
                 }
+                BlDiagnosticStage(od->bootloader, 2U);
                 if (!BootloaderInterface_ValidateFirmware(
                         od->bootloader,
                         (uint8_t)(od->bootloader->active_slot ^ 1U),
@@ -535,7 +573,12 @@ uint32_t BootOd_StreamWrite(void *user, uint16_t index, uint8_t subindex,
                     candidate.firmware_size = manifest.image_size;
                     candidate.firmware_crc = manifest.image_crc;
                     candidate.update_result = FWU_RESULT_NONE;
-                    if (Ps_Save(od->store, &candidate) != PS_OK) {
+                    BlDiagnosticStage(od->bootloader, 3U);
+                    PsResult saved = Ps_Save(od->store, &candidate);
+                    if (od->bootloader->platform.diagnostics != NULL) {
+                        od->bootloader->platform.diagnostics->value[BL_DIAG_STORAGE] = saved;
+                    }
+                    if (saved != PS_OK) {
                         return CO_ABORT_HARDWARE;
                     }
                     *od->persistent = candidate;

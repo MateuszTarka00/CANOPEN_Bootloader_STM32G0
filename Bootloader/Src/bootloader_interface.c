@@ -171,6 +171,7 @@ bool BootloaderInterface_PrepareFirmware(BootloaderInterface *bl, uint8_t slot,
 {
     uint32_t unit;
     uint32_t padding;
+    if ((bl != NULL) && bl->initialized) { BlDiagnosticStage(bl, 5U); }
     if ((bl == NULL) || !bl->initialized || (bl->write_slot != BL_NO_SLOT) ||
         !BootloaderInterface_ValidateFirmware(bl, slot, manifest)) {
         return false;
@@ -185,6 +186,7 @@ bool BootloaderInterface_PrepareFirmware(BootloaderInterface *bl, uint8_t slot,
     bl->write_limit = manifest->image_size + padding;
     bl->written = 0U;
     bl->write_manifest = *manifest;
+    BlDiagnosticStage(bl, 6U);
     if (!BootloaderInterface_EraseArea(bl, slot)) {
         BootloaderInterface_AbortFirmware(bl, slot);
         return false;

@@ -56,10 +56,29 @@ static bool flashRead(void *user, uint32_t address, uint8_t *data, uint32_t size
     return true;
 }
 
-static bool flashEraseRaw(uint32_t address, uint32_t size)
+static void flashFailure(void *user, uint32_t operation, HAL_StatusTypeDef status,
+                         uint32_t address, uint32_t bank, uint32_t page,
+                         uint32_t page_error)
+{
+    BlDiagnostics *diag = &((BlStm32Context *)user)->diagnostics;
+    if (diag->value[BL_DIAG_OPERATION] == 0U) {
+        diag->value[BL_DIAG_OPERATION] = operation;
+        diag->value[BL_DIAG_STATUS] = status;
+        diag->value[BL_DIAG_HAL_ERROR] = HAL_FLASH_GetError();
+        diag->value[BL_DIAG_SR] = FLASH->SR;
+        diag->value[BL_DIAG_ADDRESS] = address;
+        diag->value[BL_DIAG_BANK] = bank;
+        diag->value[BL_DIAG_PAGE] = page;
+        diag->value[BL_DIAG_PAGE_ERROR] = page_error;
+        diag->value[BL_DIAG_OPTR] = FLASH->OPTR;
+        diag->value[BL_DIAG_BANK_COUNT] = FLASH_BANK_NB;
+    }
+}
+
+static bool flashEraseRaw(void *user, uint32_t address, uint32_t size)
 {
     FLASH_EraseInitTypeDef erase = {0};
-    uint32_t error = 0U;
+    uint32_t error = UINT32_MAX;
     uint32_t offset;
     uint32_t remaining = size;
     DeviceEraseSpan span;
@@ -71,9 +90,12 @@ static bool flashEraseRaw(uint32_t address, uint32_t size)
         (FLASH_PAGE_SIZE != BL_ERASE_PAGE_SIZE) ||
         ((FLASH_BANK_NB == 2U) &&
          ((FLASH->OPTR & FLASH_OPTR_nSWAP_BANK) == 0U))) {
+        flashFailure(user, 1U, HAL_ERROR, address, 0U, 0U, error);
         return false;
     }
-    if (HAL_FLASH_Unlock() != HAL_OK) {
+    status = HAL_FLASH_Unlock();
+    if (status != HAL_OK) {
+        flashFailure(user, 2U, status, address, 0U, 0U, error);
         return false;
     }
     erase.TypeErase = FLASH_TYPEERASE_PAGES;
@@ -88,20 +110,26 @@ static bool flashEraseRaw(uint32_t address, uint32_t size)
         erase.Page = span.page;
         erase.NbPages = span.pages;
         status = HAL_FLASHEx_Erase(&erase, &error);
+        if (status != HAL_OK) {
+            flashFailure(user, 3U, status, BL_FLASH_START + offset,
+                         erase.Banks, erase.Page, error);
+        }
         offset += span.pages * BL_ERASE_PAGE_SIZE;
         remaining -= span.pages * BL_ERASE_PAGE_SIZE;
     }
     lock_status = HAL_FLASH_Lock();
+    if (lock_status != HAL_OK) {
+        flashFailure(user, 4U, lock_status, address, 0U, 0U, error);
+    }
     return (status == HAL_OK) && (lock_status == HAL_OK);
 }
 
 static bool flashErase(void *user, uint32_t address, uint32_t size)
 {
-    (void)user;
-    return writableRange(address, size) && flashEraseRaw(address, size);
+    return writableRange(address, size) && flashEraseRaw(user, address, size);
 }
 
-static bool flashProgramRaw(uint32_t address, const uint8_t *data, uint32_t size)
+static bool flashProgramRaw(void *user, uint32_t address, const uint8_t *data, uint32_t size)
 {
     uint32_t offset;
     HAL_StatusTypeDef status = HAL_OK;
@@ -113,9 +141,12 @@ static bool flashProgramRaw(uint32_t address, const uint8_t *data, uint32_t size
         (FLASH_PAGE_SIZE != BL_ERASE_PAGE_SIZE) ||
         ((FLASH_BANK_NB == 2U) &&
          ((FLASH->OPTR & FLASH_OPTR_nSWAP_BANK) == 0U))) {
+        flashFailure(user, 5U, HAL_ERROR, address, 0U, 0U, UINT32_MAX);
         return false;
     }
-    if (HAL_FLASH_Unlock() != HAL_OK) {
+    status = HAL_FLASH_Unlock();
+    if (status != HAL_OK) {
+        flashFailure(user, 6U, status, address, 0U, 0U, UINT32_MAX);
         return false;
     }
     for (offset = 0U; offset < size; offset += BL_PROGRAM_UNIT_SIZE) {
@@ -124,20 +155,29 @@ static bool flashProgramRaw(uint32_t address, const uint8_t *data, uint32_t size
         status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD,
                                    address + offset, word);
         if (status != HAL_OK) {
+            flashFailure(user, 7U, status, address + offset, 0U, 0U, UINT32_MAX);
             break;
         }
     }
     lock_status = HAL_FLASH_Lock();
-    return (status == HAL_OK) && (lock_status == HAL_OK) &&
-        (memcmp((const void *)(uintptr_t)address, data, size) == 0);
+    if (lock_status != HAL_OK) {
+        flashFailure(user, 8U, lock_status, address, 0U, 0U, UINT32_MAX);
+    }
+    if ((status != HAL_OK) || (lock_status != HAL_OK)) {
+        return false;
+    }
+    if (memcmp((const void *)(uintptr_t)address, data, size) != 0) {
+        flashFailure(user, 9U, HAL_ERROR, address, 0U, 0U, UINT32_MAX);
+        return false;
+    }
+    return true;
 }
 
 static bool flashProgram(void *user, uint32_t address,
                          const uint8_t *data, uint32_t size)
 {
-    (void)user;
     return writableRange(address, size) &&
-        flashProgramRaw(address, data, size);
+        flashProgramRaw(user, address, data, size);
 }
 
 static bool nvmRange(uint8_t page, uint32_t offset, uint32_t size)
@@ -165,18 +205,22 @@ static bool nvmRead(void *user, uint8_t page, uint32_t offset,
 static bool nvmErase(void *user, uint8_t page)
 {
     uint32_t address = BL_NVM_START + ((uint32_t)page * BL_ERASE_PAGE_SIZE);
-    (void)user;
-    return nvmRange(page, 0U, BL_ERASE_PAGE_SIZE) &&
-        flashEraseRaw(address, BL_ERASE_PAGE_SIZE);
+    if (!nvmRange(page, 0U, BL_ERASE_PAGE_SIZE)) {
+        flashFailure(user, 1U, HAL_ERROR, address, 0U, 0U, UINT32_MAX);
+        return false;
+    }
+    return flashEraseRaw(user, address, BL_ERASE_PAGE_SIZE);
 }
 
 static bool nvmWrite(void *user, uint8_t page, uint32_t offset,
                      const uint8_t *data, uint32_t size)
 {
     uint32_t address = BL_NVM_START + ((uint32_t)page * BL_ERASE_PAGE_SIZE) + offset;
-    (void)user;
-    return nvmRange(page, offset, size) && (data != NULL) &&
-        flashProgramRaw(address, data, size);
+    if (!nvmRange(page, offset, size) || (data == NULL)) {
+        flashFailure(user, 5U, HAL_ERROR, address, 0U, 0U, UINT32_MAX);
+        return false;
+    }
+    return flashProgramRaw(user, address, data, size);
 }
 
 static bool persist(BlStm32Context *context)
@@ -480,6 +524,7 @@ BlPlatform BlStm32_Platform(BlStm32Context *context)
     BlPlatform platform;
     memset(&platform, 0, sizeof(platform));
     platform.user = context;
+    platform.diagnostics = &context->diagnostics;
     platform.read = flashRead;
     platform.erase = flashErase;
     platform.program = flashProgram;

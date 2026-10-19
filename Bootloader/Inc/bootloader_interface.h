@@ -17,6 +17,17 @@
 #define BL_CRC_READ_SIZE 32U
 #define BL_IMAGE_DIGEST_SIZE 32U
 
+/* Volatile bench diagnostics; never part of the persistent/wire image format. */
+enum {
+    BL_DIAG_STAGE, BL_DIAG_STORAGE, BL_DIAG_OPERATION, BL_DIAG_STATUS,
+    BL_DIAG_HAL_ERROR, BL_DIAG_SR, BL_DIAG_ADDRESS, BL_DIAG_BANK,
+    BL_DIAG_PAGE, BL_DIAG_PAGE_ERROR, BL_DIAG_OPTR, BL_DIAG_BANK_COUNT,
+    BL_DIAG_COUNT
+};
+typedef struct {
+    uint32_t value[BL_DIAG_COUNT];
+} BlDiagnostics;
+
 typedef struct {
     uint32_t address;
     uint32_t size;
@@ -56,6 +67,7 @@ typedef struct {
  */
 typedef struct {
     void *user;
+    BlDiagnostics *diagnostics;
     bool (*read)(void *user, uint32_t address, uint8_t *data, uint32_t size);
     bool (*erase)(void *user, uint32_t address, uint32_t size);
     bool (*program)(void *user, uint32_t address, const uint8_t *data, uint32_t size);
@@ -86,6 +98,13 @@ typedef struct {
     bool initialized;
     bool recovery_required;
 } BootloaderInterface;
+
+static inline void BlDiagnosticStage(BootloaderInterface *bl, uint32_t stage)
+{
+    if (bl->platform.diagnostics != NULL) {
+        bl->platform.diagnostics->value[BL_DIAG_STAGE] = stage;
+    }
+}
 
 /** Initialize only if every memory range and mandatory platform callback is valid. */
 bool BootloaderInterface_Init(BootloaderInterface *bl, const BlLayout *layout,
