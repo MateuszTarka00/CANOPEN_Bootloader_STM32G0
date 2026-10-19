@@ -12,6 +12,7 @@
 
 #define BL_UPDATE_TIMEOUT_MS UINT32_C(15000)
 #define BL_LOOP_DELAY_MS 1U
+#define BL_DISCOVERY_TIMEOUT_MS UINT32_C(5000)
 
 typedef struct {
     BlStm32Context platform;
@@ -23,6 +24,8 @@ typedef struct {
     bool update_valid;
     bool canopen_valid;
     bool trial_decision_done;
+    bool discovery_waiting;
+    uint32_t discovery_started;
 } BlRuntime;
 
 static BlRuntime runtime;
@@ -127,6 +130,51 @@ static void emitStartupError(uint16_t code, uint32_t detail)
     runtime.canopen.tx_pending = true;
 }
 
+static bool consumeDiscoveryRequest(void)
+{
+    PsData candidate;
+    if (!runtime.platform.storage_valid ||
+        (runtime.platform.persistent.boot_request != 2U)) {
+        return true;
+    }
+    candidate = runtime.platform.persistent;
+    candidate.boot_request = 0U;
+    candidate.boot_node_id = 0U;
+    candidate.boot_bitrate = 0U;
+    candidate.boot_protocol = 0U;
+    if (Ps_Save(&runtime.platform.store, &candidate) != PS_OK) {
+        return false;
+    }
+    runtime.platform.persistent = candidate;
+    runtime.discovery_waiting = applicationValid() &&
+        (candidate.update_state == BL_TX_IDLE);
+    return true;
+}
+
+static void observeDiscovery(const CoFrame *frame, bool handled)
+{
+    if (handled && (frame->id == (uint16_t)(0x600U + runtime.canopen.nmt.node_id)) &&
+        (frame->length == 8U) && runtime.canopen.tx_pending &&
+        (runtime.canopen.pending_tx.id == (uint16_t)(0x580U + runtime.canopen.nmt.node_id)) &&
+        (runtime.canopen.pending_tx.data[0] != 0x80U)) {
+        runtime.discovery_waiting = false;
+    }
+}
+
+static void pollDiscovery(uint32_t now)
+{
+    if (runtime.discovery_waiting &&
+        ((now - runtime.discovery_started) >= BL_DISCOVERY_TIMEOUT_MS)) {
+        runtime.discovery_waiting = false;
+        if ((runtime.platform.persistent.update_state != BL_TX_IDLE) ||
+            runtime.canopen.od.container_active ||
+            (runtime.update.state != FWU_IDLE) ||
+            !bootApplication()) {
+            Error_Handler();
+        }
+    }
+}
+
 void Bootloader_Main(void)
 {
     bool app_ok;
@@ -155,7 +203,7 @@ void Bootloader_Main(void)
         Error_Handler();
     }
 
-    if (!BlStm32_FdcanInit(node_id, bitrate)) {
+    if (!consumeDiscoveryRequest() || !BlStm32_FdcanInit(node_id, bitrate)) {
         Error_Handler();
     }
     runtime.canopen_valid = Co_Init(
@@ -172,6 +220,7 @@ void Bootloader_Main(void)
     if (!runtime.canopen_valid) {
         Error_Handler();
     }
+    runtime.discovery_started = HAL_GetTick();
     prepareOdManifest();
     if (!runtime.platform.storage_valid) {
         emitStartupError(0x5000U, (uint32_t)PS_CORRUPT);
@@ -184,9 +233,11 @@ void Bootloader_Main(void)
     for (;;) {
         now = HAL_GetTick();
         if (BlStm32_FdcanReceive(&received)) {
-            (void)Co_Receive(&runtime.canopen, &received, now);
+            bool handled = Co_Receive(&runtime.canopen, &received, now);
+            observeDiscovery(&received, handled);
         }
         Co_Poll(&runtime.canopen, HAL_GetTick());
+        pollDiscovery(HAL_GetTick());
         if (runtime.canopen.nmt.reset_requested) {
             BlStm32_SystemReset();
         }

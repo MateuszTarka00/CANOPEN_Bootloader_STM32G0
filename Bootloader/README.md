@@ -150,7 +150,7 @@ Bench procedure:
    `Release\CANOPEN_Bootloader_STM32G0.bin` (36,864 bytes) at `0x08000000`
    using SWD, **without mass erase**; preserve application, factory and NVM.
 2. Power-cycle after programming, then enter service mode as before.
-   Read Node 126 `0x100A:00` = `1.0.5`, `0x200D:00` = `0x00010005`,
+   Read Node 126 `0x100A:00` = `1.0.6`, `0x200D:00` = `0x00010006`,
    and `0x2010:00` = 14 to verify this image.
 3. Retry the **same signed 28,708-byte file**, capturing full CAN traffic.
    If it aborts, do not reset/retry yet: read every `0x2010:01..0E` and
@@ -166,9 +166,68 @@ Bench procedure:
    Do not automatically clear error flags/change option bytes to hide a failure.
 
 The observed `0x1F51:01=1` start command is supported from 1.0.5; no password
-or new activation metadata is defined. End-to-end wizard activation
-and full interoperability still require hardware verification. These diagnostics identify
+or new activation metadata is defined. The first transfer/activation/application
+launch was subsequently confirmed on hardware; repeated automatic entry and
+full interoperability still require hardware verification. These diagnostics identify
 the actual failing path; they are not a claim that the physical fault is fixed.
+
+### 1.0.6 addressed NMT discovery / application 0.1.1
+
+The first update and application launch were confirmed on hardware with 1.0.5.
+The next trace showed LiftAppTool sending NMT Reset Node to application Node 1,
+then probing Node 126 approximately 3.3 seconds later. The old application
+ignored that command; no firmware transfer had started.
+
+Application 0.1.1 handles only an exactly two-byte, locally addressed
+`0x000 / 81 01` reset as a vendor-specific discovery policy. Broadcast resets,
+other nodes, Reset Communication and malformed commands do not enter service.
+It requires valid factory identity, an idle SDO channel, an available updated
+bootloader, an idle/confirmed journal and the existing cooperative service
+interlock. It persists `boot_request=2` and resets without generating or waiting
+for an SDO ACK. Errors are retained in handoff diagnostics and reported by EMCY
+where the transport is available. Vendor SDO entry (`boot_request=1`) retains
+its exact-response TX confirmation behavior.
+
+Bootloader 1.0.6 normalizes CONFIRMED state before consuming discovery. It clears
+the one-shot request durably before starting CAN; a save failure is fail-stop.
+With a valid idle Slot A it waits 5000 ms from CANopen initialization. A handled,
+eight-byte local SDO request with a non-abort response queued cancels the
+deadline and leaves the normal service/update loop running. Heartbeats, NMT,
+foreign traffic and aborted requests do not claim the window. Without contact,
+the bootloader revalidates and jumps to Slot A; it never boots an active transfer
+or a non-idle transaction. Ordinary power-on without a request remains immediate.
+Invalid images and interrupted transactions retain existing recovery behavior.
+This is not a complete CiA 301 NMT slave implementation or safety authorization.
+
+The discovery contract's final word is now a capability bitmask: bit 0 means
+signing enabled, bit 1 means bounded NMT discovery supported (current value 3).
+New application code still accepts the old signed contract (value 1) for vendor
+SDO entry, but refuses NMT discovery on that bootloader. Storage schema/layout
+are unchanged; request values 0/1 retain their meanings and value 2 is new.
+The commissioning tool accepts signed capability words 1 and 3.
+
+**One-time upgrade order from application 0.1.0 + bootloader 1.0.5:**
+
+1. Back up Flash. While the old pair is still installed, explicitly enter service
+   by SDO to Node 1: COB-ID `0x601`, DLC 8, `2F 00 20 00 01 00 00 00`.
+   Expect `0x581 / 60 00 20 00 00 00 00 00`, followed by bootloader Node 126.
+2. Use the existing working bootloader transfer/start path to install
+   `out/vega-0.1.1.update.bin` (29,428 bytes), not ZIP or a raw application BIN.
+   It is signed for vendor 103, product/variant 1, hardware 0.1, version `0x101`.
+   Check that the running application reports `0.1.1` and completes its self-test.
+3. Program the new 36,864-byte bootloader BIN at `0x08000000` by SWD, without
+   mass erase. Preserve Slots A/B, factory identity and journal, then power-cycle.
+4. Start another LiftAppTool update from Node 1. Expect NMT Reset Node 1,
+   boot-up on `0x77E`, and a successful `0x67E/0x5FE` discovery exchange before
+   the five-second deadline. A manual `0x000 / 81 01` without subsequent SDO
+   traffic must return to application Node 1 after the window.
+
+Do not install the bootloader first while retaining application 0.1.0: that old
+application compares all contract words exactly and rejects the new flags for
+vendor handoff. If already mixed, use SWD recovery with the known signed image
+and matching manifest; do not bypass validation or mass-erase identity/NVM.
+The new NMT entry/timeout path is native-tested and ARM-built, but its full
+LiftAppTool/hardware behavior still needs bench verification.
 
 ### 1.0.5 stored-image vectors and observed start command
 
@@ -448,9 +507,9 @@ These tests do not replace target link-size,
 FDCAN, flash-bank, power-cut, signature interoperability, LiftAppTool, or
 CiA conformance testing.
 
-The 1.0.5 Debug/Release verifier and LTO image contain 35,788 bytes of
-text, 84 bytes of initialized data and 5,700 bytes of BSS. The load image ends
-at `0x08008C00`, leaving 992 bytes before the fixed discovery record at
+The 1.0.6 Debug/Release verifier and LTO image contain 36,076 bytes of
+text, 84 bytes of initialized data and 5,708 bytes of BSS. The load image ends
+at `0x08008D20`, leaving 704 bytes before the fixed discovery record at
 `0x08008FE0`. The record contains
 the protocol, layout and signing gate and is checked by the application.
 The linker asserts that the load image cannot overlap this record or either
@@ -458,7 +517,7 @@ application slot. The exported bootloader BIN spans exactly 36 KiB including
 the record and address gap, not 36 KiB of executable code.
 Both projects automatically generate the raw BIN in their selected Debug/Release
 output directory after a successful CubeIDE build.
-Both 1.0.5 BIN outputs are byte-identical. The 1.0.3 ELF inspection confirmed that TIM14
+Both 1.0.6 BIN outputs are byte-identical. The 1.0.3 ELF inspection confirmed that TIM14
 and both shared TIM16/TIM17/FDCAN vectors resolve to Default_Handler, TIM1
 retains its tick handler, and HAL_FDCAN_IRQHandler/FDCAN2/TIM17 handles are not
 linked into the bootloader.
@@ -466,11 +525,13 @@ CubeIDE 1.16.1 still generates `.su`/`.cyclo` peer-output rules when the reports
 are disabled; clean LTO builds warn that these diagnostic outputs were not
 emitted. These are generator/report warnings, not linker overflow or C errors.
 
-A valid signed application boots normally. Only an explicit update request
-keeps a healthy device in service mode; invalid images/unfinished transactions
+A valid signed application boots normally. An explicit update request
+keeps a healthy device in service mode; an addressed NMT reset from application
+0.1.1 opens the bounded discovery window described above. Invalid images/unfinished transactions
 remain in recovery. Per the prototype requirement there is no physical service
 interlock: the application cooperatively quiesces its other tasks after the
-request and resets only after the exact SDO response has actually transmitted.
+request. SDO entry resets only after its exact response has actually transmitted;
+NMT discovery has no response and resets after the request is durable.
 This is not a lift safety authorization mechanism; use a controlled bench.
 
 Before production programming:

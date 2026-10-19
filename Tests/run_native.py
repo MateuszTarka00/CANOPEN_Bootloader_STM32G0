@@ -60,6 +60,20 @@ def main() -> None:
         shutil.rmtree(output)
     output.mkdir()
     try:
+        main_source = (ROOT / "Bootloader" / "Src" / "bootloader_main.c").read_text()
+        discovery_timeout = re.search(
+            r"^#define BL_DISCOVERY_TIMEOUT_MS .+$", main_source, re.MULTILINE)
+        if discovery_timeout is None:
+            raise RuntimeError("Missing boot discovery deadline.")
+        (output / "discovery_bodies.inc").write_text(discovery_timeout.group() + "\n" + "\n".join(
+            function_body(main_source, signature) for signature in (
+                "static bool consumeDiscoveryRequest", "static void observeDiscovery",
+                "static void pollDiscovery")))
+        executable = output / "test_boot_discovery.exe"
+        subprocess.run(flags + ["-I" + str(output),
+                               str(ROOT / "Tests" / "test_boot_discovery.c"),
+                               "-o", str(executable)], check=True)
+        subprocess.run([str(executable)], check=True)
         target = (ROOT / "Bootloader" / "Src" / "stm32_boot_platform.c").read_text()
         (output / "vector_body.inc").write_text(function_body(target, "static bool vectorValid"))
         executable = output / "test_image_vectors.exe"

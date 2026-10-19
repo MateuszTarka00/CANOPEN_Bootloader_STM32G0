@@ -160,6 +160,17 @@ class CommissioningTests(unittest.TestCase):
             prepare_factory.factory_record(self.manifest, 0, 1, 0x10003)
         with self.assertRaises(PackageError):
             prepare_factory.factory_record(self.manifest, 123, 1, 0x20000)
+        # Bounded-discovery capability extends the signing flags, not the layout.
+        for flags in (3, 0, 2, 5):
+            struct.pack_into("<I", boot, 0x8FFC, flags)
+            boot_path.write_bytes(boot)
+            destination = self.root / f"flags-{flags}"
+            args[-1] = str(destination)
+            with patch("sys.argv", args), patch.object(
+                    prepare_factory, "read_firmware_public_key", return_value=self.public):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(prepare_factory.main(), 0 if flags == 3 else 2)
+            self.assertEqual(destination.exists(), flags == 3)
         struct.pack_into("<8I", boot, 0x8FE0, 0x424C4331, 2, 0x08009000,
                          0x3A800, 0x0807E800, 0x0807F000, 0x9000, 1)
         boot_path.write_bytes(boot)

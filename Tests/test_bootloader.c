@@ -599,6 +599,11 @@ static void testRestartableSwapAndRollback(bool device_layout)
     data.boot_protocol = 2U;
     assert(BlTransaction_OnStartup(&transaction));
     assert(data.update_state == BL_TX_IDLE && data.boot_request == 1U);
+    data.update_state = BL_TX_CONFIRMED;
+    data.boot_request = 2U;
+    assert(Ps_Save(&store, &data) == PS_OK);
+    assert(BlTransaction_OnStartup(&transaction));
+    assert(data.update_state == BL_TX_IDLE && data.boot_request == 2U);
     puts("A/B restart, trial rollback, and new confirmed-image request preserved OK");
 }
 
@@ -1396,9 +1401,9 @@ static void testContainerFailureDiagnostics(void)
         uint8_t value[16];
         uint32_t size;
         assert(BootOd_Read(&od, 0x100AU, 0U, value, &size) == 0U);
-        assert(size == 5U && memcmp(value, "1.0.5", 5U) == 0);
+        assert(size == 5U && memcmp(value, "1.0.6", 5U) == 0);
         assert(BootOd_Read(&od, 0x200DU, 0U, value, &size) == 0U);
-        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010005));
+        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010006));
     }
     flash.diagnostics.value[BL_DIAG_STAGE] = 3U;
     flash.diagnostics.value[BL_DIAG_OPERATION] = 0x00030003U;

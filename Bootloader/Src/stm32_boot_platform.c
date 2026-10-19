@@ -20,7 +20,7 @@ __attribute__((section(".boot_contract"), used))
 static const uint32_t boot_contract[8] = {
     UINT32_C(0x424C4331), BL_CAN_PROTOCOL_VERSION, BL_SLOT_A_START,
     BL_SLOT_SIZE, BL_FACTORY_START, BL_NVM_START, BL_BOOT_SIZE,
-    BL_SIGNING_PUBLIC_KEY_PROVISIONED
+    BL_SIGNING_PUBLIC_KEY_PROVISIONED | 2U
 };
 
 static bool flashContains(uint32_t address, uint32_t size)
@@ -439,7 +439,7 @@ static void readFactory(FiData *factory, bool *valid)
 
 static bool supportedHandoff(const PsData *data)
 {
-    return (data->boot_request == 1U) &&
+    return ((data->boot_request == 1U) || (data->boot_request == 2U)) &&
         (data->boot_node_id >= 1U) && (data->boot_node_id <= 127U) &&
         (data->boot_bitrate == BL_CAN_SUPPORTED_BITRATE) &&
         (data->boot_protocol == BL_CAN_PROTOCOL_VERSION);

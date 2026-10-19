@@ -24,7 +24,7 @@ otherwise use the generated BIN and run the packaging command from this reposito
   ".\Tools\package_firmware.py" `
   --image "C:\Projects\VEGA_CANOPEN_TRANSLATOR_STM32\Debug\VEGA_CANOPEN_TRANSLATOR_STM32G0.bin" `
   --output-prefix ".\out\vega-1" `
-  --version 0x100 `
+  --version 0x101 `
   --vendor-id 0x12345678 `
   --product-code 0x00000001 `
   --hardware-variant 0x00000001 `
@@ -37,7 +37,7 @@ values provisioned in the target's factory identity. Hardware revisions are
 encoded as `(major << 16) | minor`, inclusive. The tool refuses images with an
 invalid vector table or larger than the 104 KiB Slot-A payload.
 `--version` must match the application's numeric version. The current VEGA
-`0.1.0` version is `0x100`: `(major << 16) | (minor << 8) | patch`.
+`0.1.1` version is `0x101`: `(major << 16) | (minor << 8) | patch`.
 It is NOT encoded like the hardware revision.
 
 The default key is the prototype's Windows-DPAPI-protected OpenSSH private key
@@ -109,6 +109,10 @@ product revision and hardware revision here. Hardware revision must fall inside
 the manifest's signed compatibility range. The tool verifies signature, image
 digest, compatibility, the 32-byte bootloader discovery record at `0x08008FE0`,
 and that the compiled bootloader contains the expected public key.
+The contract's last word accepts signed flags 1 (legacy) or 3 (signing plus
+bounded NMT discovery in bootloader 1.0.6). When upgrading an existing pair,
+install application 0.1.1 through bootloader 1.0.5 first, then program the new
+bootloader without mass erase; see `../Bootloader/README.md` for entry frames.
 It refuses to overwrite an output directory.
 
 Outputs:

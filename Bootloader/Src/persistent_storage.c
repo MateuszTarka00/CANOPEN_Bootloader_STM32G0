@@ -44,7 +44,7 @@ bool Ps_Validate(const PsData *d)
         (memchr(d->software_version, '\0', PS_STRING_SIZE) != NULL) &&
         (d->active_slot <= 1U) &&
         ((d->pending_slot <= 1U) || (d->pending_slot == UINT32_MAX)) &&
-        update_state_valid && (d->boot_request <= 1U) &&
+        update_state_valid && (d->boot_request <= 2U) &&
         ((d->boot_request == 0U) ||
          ((d->boot_node_id >= 1U) && (d->boot_node_id <= 127U) &&
           (d->boot_bitrate != 0U) && (d->boot_protocol == 2U)));
