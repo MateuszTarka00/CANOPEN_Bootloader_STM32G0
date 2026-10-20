@@ -1429,9 +1429,9 @@ static void testContainerFailureDiagnostics(void)
         uint8_t value[16];
         uint32_t size;
         assert(BootOd_Read(&od, 0x100AU, 0U, value, &size) == 0U);
-        assert(size == 5U && memcmp(value, "1.0.7", 5U) == 0);
+        assert(size == 5U && memcmp(value, "1.0.8", 5U) == 0);
         assert(BootOd_Read(&od, 0x200DU, 0U, value, &size) == 0U);
-        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010007));
+        assert(size == 4U && Co_Get32(value) == UINT32_C(0x00010008));
     }
     flash.diagnostics.value[BL_DIAG_STAGE] = 3U;
     flash.diagnostics.value[BL_DIAG_OPERATION] = 0x00030003U;

@@ -37,7 +37,7 @@ values provisioned in the target's factory identity. Hardware revisions are
 encoded as `(major << 16) | minor`, inclusive. The tool refuses images with an
 invalid vector table or larger than the 104 KiB Slot-A payload.
 `--version` must match the application's numeric version. The current VEGA
-`0.1.1` version is `0x101`: `(major << 16) | (minor << 8) | patch`.
+`0.1.3` version is `0x103`: `(major << 16) | (minor << 8) | patch`.
 It is NOT encoded like the hardware revision.
 
 The default key is the prototype's Windows-DPAPI-protected OpenSSH private key
@@ -113,10 +113,13 @@ product revision and hardware revision here. Hardware revision must fall inside
 the manifest's signed compatibility range. The tool verifies signature, image
 digest, compatibility, the 32-byte bootloader discovery record at `0x08008FE0`,
 and that the compiled bootloader contains the expected public key.
-The contract's last word accepts signed flags 1 (legacy) or 3 (signing plus
-bounded NMT discovery in bootloader 1.0.6). When upgrading an existing pair,
-install application 0.1.1 through bootloader 1.0.5 first, then program the new
-bootloader without mass erase; see `../Bootloader/README.md` for entry frames.
+The contract's last word accepts signed flags 1 (legacy), 3 (bounded discovery),
+or 7 (also non-Flash reset marker, bootloader 1.0.8). Application 0.1.3 requires
+the marker capability; it does not fall back to journal writes for entry.
+For the current failing-handoff device, selectively program both bootloader
+1.0.8 and the signed Slot A recovery image by SWD without mass erase.
+Preserve factory/journal/Slot B/scratch; see the current deployment procedure
+in `../Bootloader/README.md`, not the historical 1.0.6 staged-upgrade order.
 It refuses to overwrite an output directory.
 
 Outputs:

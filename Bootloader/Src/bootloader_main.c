@@ -8,6 +8,7 @@
 #include "firmware_update.h"
 #include "main.h"
 #include "stm32_boot_platform.h"
+#include "boot_reset_request.h"
 #include <string.h>
 
 #define BL_UPDATE_TIMEOUT_MS UINT32_C(15000)
@@ -133,21 +134,24 @@ static void emitStartupError(uint16_t code, uint32_t detail)
 static bool consumeDiscoveryRequest(void)
 {
     PsData candidate;
-    if (!runtime.platform.storage_valid ||
-        (runtime.platform.persistent.boot_request != 2U)) {
+    bool reset_discovery = runtime.platform.reset_request == BOOT_RESET_DISCOVERY;
+    if (!runtime.platform.storage_valid) {
         return true;
     }
-    candidate = runtime.platform.persistent;
-    candidate.boot_request = 0U;
-    candidate.boot_node_id = 0U;
-    candidate.boot_bitrate = 0U;
-    candidate.boot_protocol = 0U;
-    if (Ps_Save(&runtime.platform.store, &candidate) != PS_OK) {
-        return false;
+    if (runtime.platform.persistent.boot_request == 2U) {
+        candidate = runtime.platform.persistent;
+        candidate.boot_request = 0U;
+        candidate.boot_node_id = 0U;
+        candidate.boot_bitrate = 0U;
+        candidate.boot_protocol = 0U;
+        if (Ps_Save(&runtime.platform.store, &candidate) != PS_OK) {
+            return false;
+        }
+        runtime.platform.persistent = candidate;
+        reset_discovery = true;
     }
-    runtime.platform.persistent = candidate;
-    runtime.discovery_waiting = applicationValid() &&
-        (candidate.update_state == BL_TX_IDLE);
+    runtime.discovery_waiting = reset_discovery && applicationValid() &&
+        (runtime.platform.persistent.update_state == BL_TX_IDLE);
     return true;
 }
 

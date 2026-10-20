@@ -8,6 +8,7 @@
 #include "firmware_auth_key.h"
 #include "firmware_manifest.h"
 #include "fdcan.h"
+#include "boot_reset_request.h"
 #include <string.h>
 
 #define BL_CAN_DEFAULT_NODE_ID DEVICE_BOOT_NODE_ID
@@ -20,7 +21,7 @@ __attribute__((section(".boot_contract"), used))
 static const uint32_t boot_contract[8] = {
     UINT32_C(0x424C4331), BL_CAN_PROTOCOL_VERSION, BL_SLOT_A_START,
     BL_SLOT_SIZE, BL_FACTORY_START, BL_NVM_START, BL_BOOT_SIZE,
-    BL_SIGNING_PUBLIC_KEY_PROVISIONED | 2U
+    BL_SIGNING_PUBLIC_KEY_PROVISIONED | 2U | BOOT_RESET_CAPABILITY
 };
 
 static bool flashContains(uint32_t address, uint32_t size)
@@ -453,6 +454,9 @@ bool BlStm32_ContextInit(BlStm32Context *context)
         return false;
     }
     memset(context, 0, sizeof(*context));
+    if (!BootReset_Take(&context->reset_request)) {
+        return false;
+    }
     io.user = context;
     io.read = nvmRead;
     io.erase = nvmErase;
@@ -496,6 +500,9 @@ bool BlStm32_ContextInit(BlStm32Context *context)
     if (context->storage_valid && supportedHandoff(&context->persistent)) {
         context->handoff_requested = true;
         context->bitrate = context->persistent.boot_bitrate;
+    }
+    if (context->reset_request != 0U) {
+        context->handoff_requested = true;
     }
     return true;
 }

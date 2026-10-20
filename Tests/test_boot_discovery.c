@@ -4,15 +4,19 @@
 #include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
+#define BOOT_RESET_DISCOVERY 2U
 
 static struct {
     struct {
         bool storage_valid;
+        bool handoff_requested;
+        uint32_t reset_request;
         PsData persistent;
         PsStore store;
     } platform;
     Canopen canopen;
     FirmwareUpdate update;
+    BlTransaction transaction;
     bool discovery_waiting;
     uint32_t discovery_started;
 } runtime;
@@ -22,6 +26,15 @@ static PsData saved;
 static jmp_buf fault;
 static bool applicationValid(void) { return app_valid; }
 static bool bootApplication(void) { ++jumps; return jump_ok; }
+bool BlTransaction_OnStartup(BlTransaction *transaction)
+{
+    (void)transaction;
+    if (runtime.platform.persistent.update_state == BL_TX_CONFIRMED) {
+        runtime.platform.persistent.update_state = BL_TX_IDLE;
+        return true;
+    }
+    return false;
+}
 static void Error_Handler(void) { longjmp(fault, 1); }
 PsResult Ps_Save(PsStore *store, const PsData *data)
 {
@@ -50,6 +63,19 @@ int main(void)
 {
     uint32_t wrap, scenario;
     CoFrame q = {0};
+    setup(0U);
+    runtime.platform.persistent.update_state = BL_TX_CONFIRMED;
+    runtime.platform.handoff_requested = true;
+    runtime.platform.reset_request = BOOT_RESET_DISCOVERY;
+    assert(!runTrialDecision() && jumps == 0U);
+    assert(runtime.platform.persistent.update_state == BL_TX_IDLE);
+    runtime.platform.persistent.boot_request = 0U;
+    assert(consumeDiscoveryRequest() && runtime.discovery_waiting && saves == 0U);
+    setup(0U); runtime.platform.persistent.update_state = BL_TX_CONFIRMED;
+    assert(runTrialDecision() && jumps == 1U);
+    setup(0U); runtime.platform.persistent.update_state = BL_TX_TRIAL;
+    runtime.platform.handoff_requested = true;
+    assert(!runTrialDecision() && jumps == 0U);
     for (wrap = 0U; wrap < 2U; ++wrap) {
         uint32_t start = wrap ? UINT32_MAX - 100U : 100U;
         setup(start);
@@ -62,6 +88,14 @@ int main(void)
         pollDiscovery(start + 6000U); assert(jumps == 1U);
     }
     setup(0U); runtime.platform.persistent.boot_request = 0U;
+    assert(consumeDiscoveryRequest() && !runtime.discovery_waiting && saves == 0U);
+    setup(0U); runtime.platform.persistent.boot_request = 0U;
+    runtime.platform.reset_request = BOOT_RESET_DISCOVERY; save_ok = false;
+    assert(consumeDiscoveryRequest() && runtime.discovery_waiting && saves == 0U);
+    pollDiscovery(4999U); assert(jumps == 0U);
+    pollDiscovery(5000U); assert(jumps == 1U);
+    setup(0U); runtime.platform.persistent.boot_request = 0U;
+    runtime.platform.reset_request = 1U;
     assert(consumeDiscoveryRequest() && !runtime.discovery_waiting && saves == 0U);
     setup(0U); runtime.platform.persistent.boot_request = 1U;
     assert(consumeDiscoveryRequest() && !runtime.discovery_waiting && saves == 0U);

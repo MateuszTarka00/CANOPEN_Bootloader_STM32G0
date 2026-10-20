@@ -83,7 +83,7 @@ def main() -> int:
         contract = struct.unpack_from("<8I", boot, FLASH_BOOT_SIZE - 32)
         if (contract[:7] != (0x424C4331, 2, FLASH_SLOT_A_START, FLASH_SLOT_SIZE,
                             FLASH_FACTORY_START, FLASH_NVM_START, FLASH_BOOT_SIZE)
-                or contract[7] not in (1, 3)):
+                or contract[7] not in (1, 3, 7)):
             raise PackageError(
                 "Bootloader discovery contract does not match the STM32G0B1RC "
                 "256 KiB layout, or signing is disabled. Rebuild both projects."

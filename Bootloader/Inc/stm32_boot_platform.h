@@ -19,6 +19,7 @@ typedef struct {
     bool storage_valid;
     bool factory_valid;
     bool handoff_requested;
+    uint32_t reset_request;
     uint8_t node_id;
     uint32_t bitrate;
 } BlStm32Context;

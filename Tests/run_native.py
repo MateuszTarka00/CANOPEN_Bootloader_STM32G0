@@ -60,6 +60,11 @@ def main() -> None:
         shutil.rmtree(output)
     output.mkdir()
     try:
+        executable = output / "test_boot_reset.exe"
+        subprocess.run(flags + ["-I" + str(ROOT / "Tests" / "reset-stubs"),
+                               str(ROOT / "Tests" / "test_boot_reset.c"),
+                               "-o", str(executable)], check=True)
+        subprocess.run([str(executable)], check=True)
         main_source = (ROOT / "Bootloader" / "Src" / "bootloader_main.c").read_text()
         discovery_timeout = re.search(
             r"^#define BL_DISCOVERY_TIMEOUT_MS .+$", main_source, re.MULTILINE)
@@ -68,7 +73,7 @@ def main() -> None:
         (output / "discovery_bodies.inc").write_text(discovery_timeout.group() + "\n" + "\n".join(
             function_body(main_source, signature) for signature in (
                 "static bool consumeDiscoveryRequest", "static void observeDiscovery",
-                "static void pollDiscovery")))
+                "static void pollDiscovery", "static bool runTrialDecision")))
         executable = output / "test_boot_discovery.exe"
         subprocess.run(flags + ["-I" + str(output),
                                str(ROOT / "Tests" / "test_boot_discovery.c"),
@@ -152,7 +157,23 @@ def main() -> None:
             raise RuntimeError("C verifier did not reject the altered image.")
         if args.application_root is not None:
             app = args.application_root.resolve(strict=True)
-            for header in ("device_memory.h", "factory_identity.h"):
+            port = (app / "Core" / "Src" / "canopen_port.c").read_text()
+            installed_body = function_body(port, "static bool bootInstalled")
+            physical_vectors = "(const volatile uint32_t *)UINT32_C(0x08000000)"
+            if physical_vectors not in installed_body:
+                raise RuntimeError("Application vector address changed; update the register fixture.")
+            (output / "reset_adapter_bodies.inc").write_text(
+                installed_body.replace(physical_vectors, "test_vectors") + "\n" + "\n".join(
+                    function_body(port, signature) for signature in (
+                        "static bool discoveryInstalled", "static void resetForUpdate",
+                        "static bool prepareReset", "static bool clearReset")))
+            executable = output / "test_reset_adapter.exe"
+            subprocess.run(flags + ["-I" + str(ROOT / "Tests" / "reset-stubs"),
+                                   "-I" + str(output),
+                                   str(ROOT / "Tests" / "test_reset_adapter.c"),
+                                   "-o", str(executable)], check=True)
+            subprocess.run([str(executable)], check=True)
+            for header in ("device_memory.h", "factory_identity.h", "boot_reset_request.h"):
                 boot_header = ROOT / "Bootloader" / "Inc" / header
                 app_header = app / "Core" / "Inc" / header
                 if boot_header.read_bytes() != app_header.read_bytes():

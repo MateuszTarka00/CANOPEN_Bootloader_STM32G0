@@ -28,8 +28,9 @@ Object Dictionary -- firmware update receiver
 
 The bootloader runs a cooperative 1 ms poll loop; no FreeRTOS, heap allocation,
 or application control-layer dependency is used. CANopen uses node ID 126 and
-250 kbit/s in the current board adapter. The app enters bootloader mode through
-the existing application handoff journal (protocol 2); update transport is a
+250 kbit/s in the current board adapter. Application 0.1.3 enters through a
+one-shot backup-register marker followed by system reset; legacy protocol-2
+journal requests are still supported by the bootloader. Update transport is a
 separate versioned vendor profile and has not been verified against
 LiftAppTool.
 
@@ -38,6 +39,69 @@ SDO server (expedited, segmented and size-indicated block download), EMCY, Error
 Field, and the standard SDO server parameter. No CiA 417 OD object numbers are
 invented or claimed compliant: the applicable licensed profile edition and
 normative tables have not been supplied.
+
+### 1.0.8 / application 0.1.3: reset entry without Flash writes
+
+The 0.1.2 diagnostics `5000: 05 04 03 B1 00`, `5002: 00 00 04 00 01`,
+`5003: 03 00 00 00 00` isolate the failed entry to the request save:
+Flash CFGBSY (`SR=0x00040000`) timed out before unlock. The application therefore
+never reset. This release removes that erase/program dependency from normal
+entry, cancellation and recovery; it does not ignore/clear the Flash guard or
+claim to explain the original CFGBSY.
+
+Both projects reserve otherwise unused **TAMP BKP0R/BKP1R**. The identical
+`boot_reset_request.h` writes `0x42525100 | mode` and its bitwise complement,
+with the token committed last, barriers and register readback. Mode 1 is vendor
+service; mode 2 is bounded NMT discovery. The adapter enables PWR/RTC APB access
+with bounded DBP polling, restores the previous DBP protection and does not
+configure the RTC, oscillator, backup-domain reset or linker/RAM map.
+
+After the existing journal/factory/trial gates and cooperative service entry,
+the application verifies the marker and calls `NVIC_SystemReset`.
+Addressed `0x000 / 81 01` needs no ACK. Vendor `0x2000=1` still requires exact
+final SDO TX confirmation; failed/expired TX clears and verifies the marker
+before tasks resume. A clear failure retains service/RECOVERY_REQUIRED.
+No Flash writer is called by either path, including cleanup. Journal reads,
+trial confirmation and real image/swap/rollback metadata remain in use.
+
+Before journal loading or boot decisions, the bootloader reads and clears the
+marker. It accepts only a valid token/complement after software reset, not
+power/brownout, watchdog, option-byte or low-power reset; invalid/partial/stale
+markers are cleared too. Reset flags are cleared on startup and immediately
+before an intentional application handoff reset. Ordinary power-on is immediate.
+Mode 2 retains the 5000 ms SDO discovery window; a confirmed-image request is
+honoured after normal CONFIRMED reconciliation. Trial/rollback decisions are
+not bypassed. Legacy journal requests retain their prior handling.
+
+The contract flags are **7**: signing bit 0, bounded discovery bit 1, non-Flash
+reset marker bit 2. Application 0.1.3 refuses older bootloaders rather than
+silently falling back to the failing Flash path. Storage layout/schema and
+image signing are unchanged; the commissioning tool accepts flags 1, 3 and 7.
+
+**Current upgrade/recovery procedure (replaces the historical 1.0.6 order):**
+
+1. Back up Flash. Use an idle, confirmed device, not one in a trial or A/B swap.
+2. By SWD, program `Debug/CANOPEN_Bootloader_STM32G0.bin` at `0x08000000`
+   (36,864 bytes) and `out/vega-0.1.3-reset-swd/slot-a.bin` at `0x08009000`
+   (106,648 bytes). The latter contains the Debug image and its matching
+   signed manifest at `0x08023000`. Program both before testing the pair.
+3. Do **not** mass erase, rewrite factory/journal, or program the generated
+   `initial.hex`/factory record on this commissioned device. Preserve Slot B,
+   scratch, factory and journal. Disconnect debug and power-cycle.
+4. Check application `0x100A=0.1.3`; wait ten seconds. Start a LiftAppTool update
+   using `out/vega-0.1.3-reset-debug.update.bin` (51,440 bytes). It must enter
+   Node 126 (`0x100A=1.0.8`) after the tool's Reset Node 1.
+5. After activation, application startup and self-test, repeat the same update
+   without manually resetting. Also test `0x000 / 81 01` with no following SDO:
+   it must return to Node 1 after the five-second window.
+
+Native tests cover actual shared marker code, single-bit corruption, partial
+commit, reset causes, write/clear faults, actual application capability/reset
+callbacks, confirmed-image entry, ACK ordering and **zero erase/program calls**
+with both Flash writers disabled. Debug/Release builds pass for both projects.
+The repeated update and physical backup-register/reset behaviour still require
+the above hardware test. CFGBSY during trial confirmation, if present, remains
+a separate Flash fault; this change is not a Flash-recovery workaround.
 
 ### LiftAppTool compatibility: transport stage only
 
@@ -150,7 +214,7 @@ Bench procedure:
    `Release\CANOPEN_Bootloader_STM32G0.bin` (36,864 bytes) at `0x08000000`
    using SWD, **without mass erase**; preserve application, factory and NVM.
 2. Power-cycle after programming, then enter service mode as before.
-   Read Node 126 `0x100A:00` = `1.0.7`, `0x200D:00` = `0x00010007`,
+   Read Node 126 `0x100A:00` = `1.0.8`, `0x200D:00` = `0x00010008`,
    and `0x2010:00` = 14 to verify this image.
 3. Retry the **same signed 28,708-byte file**, capturing full CAN traffic.
    If it aborts, do not reset/retry yet: read every `0x2010:01..0E` and
@@ -171,7 +235,7 @@ launch was subsequently confirmed on hardware; repeated automatic entry and
 full interoperability still require hardware verification. These diagnostics identify
 the actual failing path; they are not a claim that the physical fault is fixed.
 
-### 1.0.7 LiftAppTool block CRC compatibility
+### Historical 1.0.7 LiftAppTool block CRC compatibility
 
 The supplied 29,352-byte `firmware_v1.update.bin` passes manifest signature,
 image SHA-256/CRC32 and vector checks. Its standard CRC16/XMODEM is `0x27CC`;
@@ -215,7 +279,7 @@ application 0.1.0 requires the earlier staged upgrade procedure below.
 If another failure occurs, retain the full trace and read `0x2010`/`0x2007`
 before resetting; the tool's automatic NMT reset clears volatile diagnostics.
 
-### 1.0.6 addressed NMT discovery / application 0.1.1
+### Historical 1.0.6 addressed NMT discovery / application 0.1.1
 
 The first update and application launch were confirmed on hardware with 1.0.5.
 The next trace showed LiftAppTool sending NMT Reset Node to application Node 1,
@@ -551,9 +615,9 @@ These tests do not replace target link-size,
 FDCAN, flash-bank, power-cut, signature interoperability, LiftAppTool, or
 CiA conformance testing.
 
-The 1.0.7 Debug/Release verifier and LTO image contain 36,172 bytes of
-text, 84 bytes of initialized data and 5,708 bytes of BSS. The load image ends
-at `0x08008D80`, leaving 608 bytes before the fixed discovery record at
+The 1.0.8 Debug/Release verifier and LTO image contain 36,488 bytes of
+text, 84 bytes of initialized data and 5,716 bytes of BSS. The load image ends
+at `0x08008EC0`, leaving 288 bytes before the fixed discovery record at
 `0x08008FE0`. The record contains
 the protocol, layout and signing gate and is checked by the application.
 The linker asserts that the load image cannot overlap this record or either
@@ -561,7 +625,7 @@ application slot. The exported bootloader BIN spans exactly 36 KiB including
 the record and address gap, not 36 KiB of executable code.
 Both projects automatically generate the raw BIN in their selected Debug/Release
 output directory after a successful CubeIDE build.
-Both 1.0.7 BIN outputs are byte-identical. The 1.0.3 ELF inspection confirmed that TIM14
+Both 1.0.8 BIN outputs are byte-identical. The 1.0.3 ELF inspection confirmed that TIM14
 and both shared TIM16/TIM17/FDCAN vectors resolve to Default_Handler, TIM1
 retains its tick handler, and HAL_FDCAN_IRQHandler/FDCAN2/TIM17 handles are not
 linked into the bootloader.
